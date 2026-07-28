@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { LLM_PROVIDERS, listModels, type LlmProvider, type ModelOption } from "@/lib/llm";
 
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -16,6 +17,8 @@ export const maxDuration = 30;
 export interface AdminModelsResponse {
   provider: LlmProvider;
   models: ModelOption[];
+  /** null = ดึงสำเร็จ · มีค่า = สาเหตุจริงที่ดึงไม่ได้ ให้เอาไปแสดงตรง ๆ */
+  error: string | null;
 }
 
 function authorized(request: NextRequest): boolean {
@@ -35,9 +38,11 @@ export async function GET(request: NextRequest) {
   }
 
   const provider = raw as LlmProvider;
+  const result = await listModels(provider);
   const payload: AdminModelsResponse = {
     provider,
-    models: await listModels(provider),
+    models: result.models,
+    error: result.error,
   };
   return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
 }

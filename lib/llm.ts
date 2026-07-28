@@ -416,14 +416,45 @@ export interface ModelOption {
   label: string;
 }
 
-export async function listModels(provider: LlmProvider): Promise<ModelOption[]> {
+export interface ModelListResult {
+  models: ModelOption[];
+  /** null = สำเร็จ · มีค่า = บอกสาเหตุจริงที่ดึงไม่ได้ */
+  error: string | null;
+}
+
+/**
+ * เดิมฟังก์ชันนี้ catch แล้วคืนลิสต์ว่างเฉย ๆ ทำให้ผู้ใช้เห็นแค่ "ไม่พบโมเดล"
+ * เหมือนกันหมดไม่ว่าจะเพราะยังไม่ใส่คีย์ คีย์ผิด หรือเน็ตมีปัญหา — วินิจฉัยไม่ได้เลย
+ * ตอนนี้ส่งสาเหตุจริงกลับไปให้หน้าหลังบ้านแสดง
+ */
+export async function listModels(provider: LlmProvider): Promise<ModelListResult> {
+  // OpenRouter เปิดรายชื่อสาธารณะ · Anthropic มีลิสต์สำรองในโค้ดอยู่แล้ว
+  // เหลือ OpenAI กับ Gemini ที่ไม่มีคีย์แล้วดูอะไรไม่ได้เลย
+  const needsKey = provider === "openai" || provider === "gemini";
+  const envKey = providerEnvKey(provider);
+  if (needsKey && envKey && !providerKey(provider)) {
+    return {
+      models: [],
+      error:
+        `ยังไม่ได้ตั้ง ${envKey} บนเซิร์ฟเวอร์ที่กำลังเปิดอยู่ — ` +
+        `ถ้าเพิ่งใส่ใน .env.local ต้องรีสตาร์ท dev server ก่อน ` +
+        `ถ้าเป็นเว็บจริงต้องตั้งที่ Vercel แล้ว redeploy`,
+    };
+  }
+
   try {
-    if (provider === "anthropic") return await listAnthropicModels();
-    if (isOpenAiCompat(provider)) return await listOpenAiCompatModels(provider);
-    return await listOllamaModels();
+    if (provider === "anthropic") return { models: await listAnthropicModels(), error: null };
+    if (isOpenAiCompat(provider)) {
+      return { models: await listOpenAiCompatModels(provider), error: null };
+    }
+    return { models: await listOllamaModels(), error: null };
   } catch (error) {
-    console.warn(`[models] ดึงรายชื่อโมเดลของ ${provider} ไม่สำเร็จ:`, describeError(error));
-    return FALLBACK_MODELS[provider].map((id) => ({ id, label: id }));
+    const detail = describeError(error);
+    console.warn(`[models] ดึงรายชื่อโมเดลของ ${provider} ไม่สำเร็จ:`, detail);
+    return {
+      models: FALLBACK_MODELS[provider].map((id) => ({ id, label: id })),
+      error: detail,
+    };
   }
 }
 
@@ -578,6 +609,26 @@ class HttpError extends Error {
   }
 }
 
+/**
+ * ดึงข้อความ error ที่คนอ่านรู้เรื่องออกจาก body
+ * ทุกเจ้าห่อไว้คนละชั้น เช่น Google ใช้ { error: { message } } ส่วน OpenAI ใช้ { error: { message } }
+ * ถ้าแกะไม่ได้ค่อยคืน body ดิบแบบตัดสั้น
+ */
+function extractApiMessage(text: string): string {
+  try {
+    const body = JSON.parse(text) as {
+      error?: { message?: string } | string;
+      message?: string;
+    };
+    if (typeof body.error === "string") return body.error;
+    if (body.error?.message) return body.error.message;
+    if (body.message) return body.message;
+  } catch {
+    /* ไม่ใช่ JSON */
+  }
+  return text.slice(0, 200);
+}
+
 async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -585,7 +636,7 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): 
     const res = await fetch(url, { ...init, signal: controller.signal, cache: "no-store" });
     const text = await res.text();
     if (!res.ok) {
-      throw new HttpError(res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+      throw new HttpError(res.status, `HTTP ${res.status}: ${extractApiMessage(text)}`);
     }
     return JSON.parse(text) as T;
   } finally {

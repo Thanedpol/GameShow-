@@ -736,6 +736,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [llm, setLlm] = useState<LlmSettings>(DEFAULT_LLM_SETTINGS);
   const [models, setModels] = useState<AdminModelsResponse["models"]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
   // คีย์ที่พิมพ์ค้างไว้ ยังไม่บันทึก — key คือชื่อ provider
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
   const [ollamaUrl, setOllamaUrl] = useState("");
@@ -772,21 +773,25 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
 
   async function fetchModels() {
     setLoadingModels(true);
+    setModelError(null);
     try {
       const res = await fetch(`/api/admin/models?provider=${effectiveProvider}`, { headers });
       const data = (await res.json()) as AdminModelsResponse | { error?: string };
-      if ("models" in data) {
-        setModels(data.models);
-        onFlash(
-          data.models.length > 0
-            ? `พบ ${data.models.length} โมเดลจาก ${effectiveProvider}`
-            : `ไม่พบโมเดลจาก ${effectiveProvider} — เช็กคีย์หรือพิมพ์ชื่อโมเดลเองได้`,
-        );
+
+      if (!("models" in data)) {
+        setModelError(data.error ?? "ดึงรายชื่อโมเดลไม่สำเร็จ");
+        return;
+      }
+
+      setModels(data.models);
+      if (data.error) {
+        // แสดงสาเหตุจริงค้างไว้บนหน้า ไม่ใช่ toast ที่หายไปใน 3 วินาที
+        setModelError(data.error);
       } else {
-        onFlash(data.error ?? "ดึงรายชื่อโมเดลไม่สำเร็จ");
+        onFlash(`พบ ${data.models.length} โมเดลจาก ${effectiveProvider}`);
       }
     } catch (e) {
-      onFlash(`ดึงรายชื่อโมเดลไม่สำเร็จ — ${String(e)}`);
+      setModelError(`ดึงรายชื่อโมเดลไม่สำเร็จ — ${String(e)}`);
     } finally {
       setLoadingModels(false);
     }
@@ -796,6 +801,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     // โมเดลของคนละเจ้าใช้ชื่อคนละแบบ เปลี่ยนเจ้าแล้วต้องล้างโมเดลเดิมทิ้ง
     setLlm({ provider: value, model: "" });
     setModels([]);
+    setModelError(null);
   }
 
   function handleSaveChoice() {
@@ -921,6 +927,12 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
             </button>
           </div>
         </Field>
+
+        {modelError ? (
+          <p className="rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-100">
+            ❌ ดึงรายชื่อโมเดลไม่ได้ — {modelError}
+          </p>
+        ) : null}
 
         <Field label="หรือพิมพ์ชื่อโมเดลเอง">
           <input
