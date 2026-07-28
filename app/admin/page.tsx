@@ -726,7 +726,7 @@ const MODEL_PLACEHOLDER: Record<string, string> = {
 const KEY_PLACEHOLDER: Record<string, string> = {
   anthropic: "sk-ant-...",
   openai: "sk-...",
-  gemini: "AIza...",
+  gemini: "AIza... หรือ AQ....",
   openrouter: "sk-or-v1-...",
 };
 

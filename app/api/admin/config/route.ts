@@ -141,11 +141,19 @@ interface SaveBody {
   ollamaBaseUrl?: string;
 }
 
-/** ตรวจรูปแบบคีย์คร่าว ๆ เพื่อกันพิมพ์ผิด ไม่ได้ยืนยันว่าคีย์ใช้ได้จริง */
+/**
+ * ตรวจรูปแบบคีย์คร่าว ๆ เพื่อกันพิมพ์ผิด ไม่ได้ยืนยันว่าคีย์ใช้ได้จริง
+ *
+ * Google AI Studio ออกคีย์สองแบบ — ของเดิมขึ้นต้น AIza ของใหม่ขึ้นต้น AQ.
+ * (มีจุดอยู่ในคีย์ด้วย) ต้องรับทั้งคู่ ไม่งั้นคีย์ที่ถูกต้องจะโดนตีกลับ
+ */
 const KEY_FORMAT: Partial<Record<LlmProvider, { pattern: RegExp; hint: string }>> = {
   anthropic: { pattern: /^sk-ant-[\w-]{10,}$/, hint: "ควรขึ้นต้นด้วย sk-ant-" },
   openai: { pattern: /^sk-[\w-]{20,}$/, hint: "ควรขึ้นต้นด้วย sk-" },
-  gemini: { pattern: /^AIza[\w-]{20,}$/, hint: "ควรขึ้นต้นด้วย AIza" },
+  gemini: {
+    pattern: /^(AIza[\w-]{20,}|AQ\.[\w.-]{20,})$/,
+    hint: "ควรขึ้นต้นด้วย AIza หรือ AQ.",
+  },
   openrouter: { pattern: /^sk-or-[\w-]{10,}$/, hint: "ควรขึ้นต้นด้วย sk-or-" },
 };
 
