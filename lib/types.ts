@@ -1,5 +1,27 @@
 // ────────────────────────────────────────────────────────────────────────────
-// Core domain types — ตรงตามสเปกในโจทย์ (มีการเพิ่มฟิลด์ที่จำเป็นบางตัว ดู README)
+// ผู้เข้าแข่งขัน
+// ────────────────────────────────────────────────────────────────────────────
+
+/** solo = ซ้อมคนเดียว · bot = สู้กับ AI · ffa = 2-4 คนตัวใครตัวมัน · team = 2-4 ทีม ทีมละ 2 */
+export type MatchMode = "solo" | "bot" | "ffa" | "team";
+
+export type ParticipantKind = "human" | "bot";
+
+export interface Participant {
+  id: string;
+  name: string;
+  kind: ParticipantKind;
+  /** โหมดทีม: ชื่อสมาชิก 2 คน */
+  members: string[];
+  score: number;
+  tokens: number;
+}
+
+export const MAX_PARTICIPANTS = 4;
+export const TEAM_SIZE = 2;
+
+// ────────────────────────────────────────────────────────────────────────────
+// คำถาม
 // ────────────────────────────────────────────────────────────────────────────
 
 export type Category =
@@ -7,137 +29,69 @@ export type Category =
   | "การเงิน"
   | "AI"
   | "สุขภาพ"
-  | "ประวัติศาสตร์"
+  | "ที่ทำงาน"
+  | "ชีวิตจริง"
+  | "สื่อสาร"
   | "ตรรกะ";
 
 export type Stage = "warmup" | "push" | "final";
 
-/** โหมดคำใบ้ที่ผู้เล่นเลือกได้ระหว่างเกม */
-export type HintType = "ตรง" | "ลวง";
+export type Difficulty = "ง่าย" | "กลาง" | "ยาก";
 
-/** โหมดที่ส่งไปยัง /api/hint (รวมโหมด final ที่สร้าง 3 ชุดพร้อมกัน) */
-export type HintMode = HintType | "final";
-
-export type PlayerId = 1 | 2;
+/**
+ * choice      = ปรนัย เลือกตัวเลือก
+ * open        = อัตนัย พิมพ์ตอบเป็นข้อความ แล้วให้ Claude ตรวจตาม rubric
+ * performance = โชว์ความสามารถ (ร้องเพลง / พูดบทความ / นำเสนอ) ให้คนอื่นกดดาว
+ */
+export type QuestionFormat = "choice" | "open" | "performance";
 
 export interface Question {
   id: string;
   category: Category;
   stage: Stage;
+  difficulty: Difficulty;
+  format: QuestionFormat;
   pointValue: number;
-  /** ตัวคำถาม — เพิ่มจากสเปก เพราะจำเป็นต่อการแสดงผล */
   prompt: string;
-  correctAnswer: string;
-  choices: string[];
-  /** คำอธิบายเฉลยแบบสั้น ใช้ตอนสรุปผล */
+  /** format: choice */
+  choices?: string[];
+  correctAnswer?: string;
+  /** format: open / performance — เกณฑ์ให้คะแนน */
+  rubric?: string;
+  /** format: open — ประเด็นที่คำตอบที่ดีควรมี (ใช้เป็นบริบทให้ผู้ตรวจ) */
+  keyPoints?: string[];
+  /** format: performance — สิ่งที่ต้องทำบนเวที */
+  task?: string;
   explanation?: string;
 }
 
-export interface HintRequest {
-  questionId: string;
-  player: PlayerId;
-  hintType: HintType;
-  aiGeneratedText: string;
-  wasCorrect: boolean;
-  /** token ที่เข้ารหัส label จริง/หลอกไว้ — client อ่านไม่ออกและปลอมไม่ได้ */
-  revealToken?: string;
-  hintId?: string;
-  /**
-   * true = คำใบ้จากรอบ AI Duel Final ซึ่งผู้เล่นไม่ได้เลือกโหมดเอง
-   * (ระบบแจกครบชุดจริง 1 หลอก 2) — ใช้แยกการแสดงผลตอน Debrief
-   */
-  fromFinalDuel?: boolean;
-}
-
-export interface GameState {
-  player1Name: string;
-  player2Name: string;
-  currentQuestionIndex: number;
-  player1Score: number;
-  player2Score: number;
-  player1Tokens: number;
-  player2Tokens: number;
-  hintHistory: HintRequest[];
-}
-
 // ────────────────────────────────────────────────────────────────────────────
-// Runtime / session state (ห่อ GameState ไว้ข้างใน)
+// กล่องคำใบ้ — 4 กล่อง มีทั้งจริงและหลอก อย่างน้อยอย่างละ 1
 // ────────────────────────────────────────────────────────────────────────────
 
-export type Phase = "setup" | "playing" | "final" | "debrief";
+export type HintTruth = "จริง" | "หลอก";
 
-export interface RoundResult {
-  questionId: string;
-  stage: Stage;
-  prompt: string;
-  correctAnswer: string;
-  answeringPlayer: PlayerId;
-  answeredChoice: string | null;
-  wasCorrect: boolean;
-  hintType: HintType | null;
-  tokenSpent: boolean;
-  pointsDelta: number;
-  /** กรณีอีกฝ่ายแย่งตอบ */
-  stealPlayer?: PlayerId;
-  stealChoice?: string | null;
-  stealCorrect?: boolean;
-  stealPoints?: number;
-  timedOut?: boolean;
-}
-
-export interface FinalResult {
-  questionId: string;
-  prompt: string;
-  correctAnswer: string;
-  player1Choice: string | null;
-  player2Choice: string | null;
-  player1Correct: boolean;
-  player2Correct: boolean;
-  player1Points: number;
-  player2Points: number;
-  revealToken: string | null;
-}
-
-export interface SessionState extends GameState {
-  phase: Phase;
-  /** ชุดคำถามที่สุ่มมาใช้ในเกมนี้ (warmup 4 + push 4 + final 1) */
-  questions: Question[];
-  finalQuestion: Question | null;
-  roundLog: RoundResult[];
-  finalResult: FinalResult | null;
-  /** ผู้เล่นคนไหนได้ "ตอบข้อแรกของช่วง" ไปแล้วบ้าง key = `${player}-${stage}` */
-  stageOpened: Record<string, boolean>;
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// API contracts
-// ────────────────────────────────────────────────────────────────────────────
-
-/** คำใบ้ที่ส่งให้ frontend — ไม่มี label จริง/หลอกติดไปด้วยโดยเจตนา */
-export interface PublicHint {
+/** สิ่งที่ client ได้รับ — ไม่มี label จริง/หลอกติดมา */
+export interface HintBox {
   id: string;
+  /** ป้ายกล่อง: A B C D */
+  label: string;
   text: string;
+}
+
+export interface RevealedHintBox extends HintBox {
+  truth: HintTruth;
+  rationale: string;
 }
 
 export interface HintApiRequest {
   questionId: string;
-  correctAnswer: string;
-  hintType: HintMode;
 }
 
 export interface HintApiResponse {
-  /** token ทึบ ส่งกลับไปที่ POST /api/reveal ตอนต้องการเฉลย */
   revealToken: string;
-  hints: PublicHint[];
-  /** "claude" = มาจาก API จริง, "fallback" = โหมดสำรองตอนไม่มี API key */
+  boxes: HintBox[];
   source: "claude" | "fallback";
-}
-
-/** ผลเฉลย label — เรียกได้หลังจบข้อ/ตอนสรุปเท่านั้น */
-export interface RevealedHint extends PublicHint {
-  truth: "จริง" | "หลอก";
-  mode: HintType;
-  rationale: string;
 }
 
 export interface RevealApiRequest {
@@ -146,27 +100,94 @@ export interface RevealApiRequest {
 
 export interface RevealApiResponse {
   questionId: string;
-  hints: RevealedHint[];
+  boxes: RevealedHintBox[];
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// ตรวจคำตอบอัตนัย
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface GradeApiRequest {
+  questionId: string;
+  answer: string;
+}
+
+export interface GradeApiResponse {
+  /** 0-100 */
+  score: number;
+  feedback: string;
+  strengths: string[];
+  improvements: string[];
+  source: "claude" | "fallback";
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// บันทึกระหว่างเกม
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface HintUsage {
+  questionId: string;
+  participantId: string;
+  boxLabel: string;
+  boxId: string;
+  text: string;
+  revealToken: string;
+  /** ผู้เล่นตอบถูกในข้อนั้นหรือไม่ (สำหรับสรุปผล) */
+  wasCorrect: boolean;
+}
+
+export interface RoundResult {
+  questionId: string;
+  stage: Stage;
+  format: QuestionFormat;
+  prompt: string;
+  participantId: string;
+  /** ปรนัย = ตัวเลือกที่กด · อัตนัย = ข้อความที่พิมพ์ · โชว์ = "-" */
+  answer: string | null;
+  correct: boolean;
+  /** 0-100 สำหรับอัตนัย/โชว์ · ปรนัยเป็น 0 หรือ 100 */
+  quality: number;
+  boxesOpened: number;
+  tokenSpent: boolean;
+  points: number;
+  timedOut: boolean;
+  feedback?: string;
+  /** ผู้แย่งตอบ (ถ้ามี) */
+  stealParticipantId?: string;
+  stealPoints?: number;
+}
+
+export type Phase = "setup" | "playing" | "debrief";
+
+export interface GameState {
+  mode: MatchMode;
+  participants: Participant[];
+  questions: Question[];
+  currentQuestionIndex: number;
+  phase: Phase;
+  roundLog: RoundResult[];
+  hintHistory: HintUsage[];
+  /** key = `${participantId}-${stage}` — เคยตอบข้อแรกของช่วงนั้นไปแล้วหรือยัง */
+  stageOpened: Record<string, boolean>;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// สรุปผล
+// ────────────────────────────────────────────────────────────────────────────
+
 export interface DebriefApiRequest {
-  player1Name: string;
-  player2Name: string;
-  player1Score: number;
-  player2Score: number;
-  hintHistory: HintRequest[];
+  participants: Array<{ name: string; score: number }>;
+  hintHistory: HintUsage[];
 }
 
 export interface DebriefNote {
-  /** index ตรงกับตำแหน่งใน hintHistory ที่ส่งไป */
   index: number;
   questionId: string;
-  hintType: string;
+  boxLabel: string;
   truth: string;
-  hintText: string;
-  wasCorrect: boolean;
-  /** คำอธิบายว่าทำไมคำใบ้นี้ถูกออกแบบแบบนี้ */
   text: string;
+  wasCorrect: boolean;
+  note: string;
 }
 
 export interface DebriefApiResponse {

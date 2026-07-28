@@ -1,73 +1,90 @@
-import type { HintType, PlayerId, Stage } from "./types";
+import type { MatchMode, Participant, Stage } from "./types";
+
+/** เวลาต่อ 1 ข้อ — รวมทุกอย่าง ทั้งเปิดกล่องคำใบ้และตอบ ห้ามเกินนี้ */
+export const QUESTION_SECONDS = 60;
+
+/** จำนวนกล่องคำใบ้ต่อข้อ */
+export const HINT_BOX_COUNT = 4;
+
+/** เปิด 1 กล่อง หักคะแนนข้อนั้น 25% (เปิดครบ 4 = ไม่เหลือคะแนน) */
+export const BOX_COST_RATIO = 0.25;
 
 export const MAX_TOKENS = 3;
-export const ANSWER_SECONDS = 20;
-export const STEAL_SECONDS = 10;
-export const FINAL_SECONDS = 15;
-/** เวลาขั้นต่ำที่ผู้เล่นจะได้หลังจากคำใบ้โผล่ขึ้นมา (กันเวลาหมดเพราะรอ API) */
-export const MIN_SECONDS_AFTER_HINT = 12;
-
-export interface AnswerScoreInput {
-  pointValue: number;
-  /** null = ไม่ได้ขอ AI ช่วย */
-  hintType: HintType | null;
-  /** ใช้โทเคนคำใบ้เพื่อยกเว้นการหัก 50% ของ "ใบ้ตรง" */
-  tokenSpent: boolean;
-  correct: boolean;
-}
-
-/**
- * กติกาคะแนน (ตามหัวข้อ R ของโจทย์)
- *  - ไม่ขอใบ้ + ถูก        → +pointValue
- *  - ไม่ขอใบ้ + ผิด        → 0 (แล้วเปิดสิทธิ์แย่งตอบ)
- *  - "ใบ้ตรง" + ถูก        → +pointValue × 50%  (ถ้าจ่ายโทเคน → เต็ม 100%)
- *  - "ใบ้ตรง" + ผิด        → 0 (แล้วเปิดสิทธิ์แย่งตอบ)
- *  - "ใบ้ลวง" + ถูก        → +pointValue × 2
- *  - "ใบ้ลวง" + ผิด        → −pointValue × 2 (แล้วเปิดสิทธิ์แย่งตอบ)
- *
- * หมายเหตุ: หมดเวลา = ตอบผิด (ใช้กติกาเดียวกันทุกประการ)
- */
-export function scoreForAnswer({
-  pointValue,
-  hintType,
-  tokenSpent,
-  correct,
-}: AnswerScoreInput): number {
-  if (hintType === "ลวง") {
-    return correct ? pointValue * 2 : -pointValue * 2;
-  }
-  if (hintType === "ตรง") {
-    if (!correct) return 0;
-    return tokenSpent ? pointValue : Math.round(pointValue * 0.5);
-  }
-  return correct ? pointValue : 0;
-}
-
-/** แย่งตอบถูก = ได้คะแนนเต็มของข้อนั้น, ผิด/หมดเวลา = 0 (ไม่ติดลบ) */
-export function scoreForSteal(pointValue: number, correct: boolean): number {
-  return correct ? pointValue : 0;
-}
-
-/** AI Duel Final — คะแนน x2 ของข้อนั้น, ตอบผิดไม่ติดลบ */
-export function scoreForFinal(pointValue: number, correct: boolean): number {
-  return correct ? pointValue * 2 : 0;
-}
-
-/** สลับผู้เล่นที่เป็นเจ้าของสิทธิ์ตอบ: ข้อคี่ = ผู้เล่น 1, ข้อคู่ = ผู้เล่น 2 */
-export function activePlayerFor(questionIndex: number): PlayerId {
-  return questionIndex % 2 === 0 ? 1 : 2;
-}
-
-export function opponentOf(player: PlayerId): PlayerId {
-  return player === 1 ? 2 : 1;
-}
-
-export function stageKey(player: PlayerId, stage: Stage): string {
-  return `${player}-${stage}`;
-}
 
 export const STAGE_LABEL: Record<Stage, string> = {
   warmup: "Warm-Up",
   push: "Push Your Luck",
   final: "AI Duel Final",
 };
+
+export const MODE_LABEL: Record<MatchMode, string> = {
+  solo: "ซ้อมคนเดียว",
+  bot: "ดวลกับบอท AI",
+  ffa: "ตัวใครตัวมัน",
+  team: "แข่งเป็นทีม",
+};
+
+/**
+ * ตัวคูณคะแนนที่เหลือหลังเปิดกล่องคำใบ้
+ * paidBoxes = จำนวนกล่องที่เปิดโดยไม่ได้ใช้โทเคน
+ */
+export function hintMultiplier(paidBoxes: number): number {
+  return Math.max(0, 1 - BOX_COST_RATIO * paidBoxes);
+}
+
+export interface ScoreInput {
+  pointValue: number;
+  /** 0-100 — ปรนัยคือ 0 หรือ 100 · อัตนัย/โชว์คือคะแนนจากผู้ตรวจ */
+  quality: number;
+  /** กล่องที่เปิดและต้องจ่ายคะแนน (ไม่นับกล่องที่ใช้โทเคนแลก) */
+  paidBoxes: number;
+  timedOut: boolean;
+}
+
+/** ไม่ตอบ/หมดเวลา = 0 คะแนนเสมอ และไม่มีคะแนนติดลบในเกมนี้ */
+export function scoreForRound({
+  pointValue,
+  quality,
+  paidBoxes,
+  timedOut,
+}: ScoreInput): number {
+  if (timedOut || quality <= 0) return 0;
+  const raw = pointValue * hintMultiplier(paidBoxes) * (quality / 100);
+  return Math.max(0, Math.round(raw));
+}
+
+/** แย่งตอบถูก = ได้คะแนนเต็มของข้อนั้น (ผู้แย่งไม่ได้เปิดกล่อง) */
+export function scoreForSteal(pointValue: number, correct: boolean): number {
+  return correct ? pointValue : 0;
+}
+
+export function stageKey(participantId: string, stage: Stage): string {
+  return `${participantId}-${stage}`;
+}
+
+/** ผลัดกันตอบวนไปตามลำดับผู้เข้าแข่งขัน */
+export function activeParticipantIndex(questionIndex: number, count: number): number {
+  return count > 0 ? questionIndex % count : 0;
+}
+
+export function participantById(
+  participants: Participant[],
+  id: string,
+): Participant | undefined {
+  return participants.find((p) => p.id === id);
+}
+
+export function nameOfId(participants: Participant[], id: string): string {
+  return participantById(participants, id)?.name ?? "—";
+}
+
+export function rankParticipants(participants: Participant[]): Participant[] {
+  return [...participants].sort((a, b) => b.score - a.score);
+}
+
+/** คืนผู้ชนะ (อาจเสมอกันหลายคน) */
+export function winnersOf(participants: Participant[]): Participant[] {
+  if (participants.length === 0) return [];
+  const top = Math.max(...participants.map((p) => p.score));
+  return participants.filter((p) => p.score === top);
+}

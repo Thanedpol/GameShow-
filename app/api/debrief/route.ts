@@ -1,54 +1,48 @@
 import { NextResponse, type NextRequest } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { getQuestionById } from "@/lib/questions";
 import { HINT_MODEL, getAnthropic, openReveal, parseJsonLoose } from "@/lib/hintEngine";
 import type { DebriefApiRequest, DebriefApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// สรุปผลต้องรอ Claude อ่านคำใบ้ทั้งเกม — ดีฟอลต์ 10 วิของ Vercel ไม่พอ
 export const maxDuration = 60;
 
 interface EnrichedItem {
   index: number;
   questionId: string;
   prompt: string;
-  correctAnswer: string;
-  player: 1 | 2;
-  hintType: string;
-  hintText: string;
-  wasCorrect: boolean;
+  boxLabel: string;
+  text: string;
   truth: string;
   rationale: string;
-  fromFinalDuel: boolean;
+  wasCorrect: boolean;
 }
 
 const DEBRIEF_SYSTEM = `
-คุณคือโปรดิวเซอร์ของเกมโชว์ภาษาไทย "ใบ้จริง...ใบ้หลอก"
-หน้าที่ตอนนี้: เขียนสรุปช่วง Debrief หลังจบเกม เพื่ออธิบายให้ผู้เล่นเข้าใจว่า
-"คำใบ้แต่ละข้อที่เคยขอไป ถูกออกแบบมาแบบนั้นเพราะอะไร"
+คุณคือโปรดิวเซอร์ของเกมโชว์ไทย "ใบ้จริง...ใบ้หลอก"
+หน้าที่: เขียนสรุปช่วง Debrief หลังจบเกม อธิบายว่ากล่องคำใบ้แต่ละกล่องที่ผู้เล่นเปิด
+ถูกออกแบบมาแบบนั้นเพราะอะไร และผู้เล่นจะจับสังเกตได้อย่างไรถ้าเจออีก
 
 แนวทาง:
 - ภาษาไทย เป็นกันเอง ให้กำลังใจ แต่ตรงประเด็น
-- แต่ละคำใบ้เขียน 1-2 ประโยค บอกให้ชัดว่าส่วนไหนเป็นเบาะแสจริง ส่วนไหนถูกใส่มาเพื่อลวง
-  และผู้เล่นจะจับสังเกตได้อย่างไรถ้าเจอแบบนี้อีก
-- สำหรับคำใบ้ที่มีส่วนหลอก ให้ย้ำสั้น ๆ ว่าส่วนที่หลอกนั้นเป็นเรื่องแต่งขึ้นเพื่อเกม
-  ห้ามนำไปอ้างอิงจริง
-- ช่อง overall เขียนสรุปภาพรวมทั้งเกม 2-4 ประโยค พูดถึงบทเรียนเรื่องการตรวจสอบข้อมูล
-- ห้ามแต่งข้อมูลใหม่นอกเหนือจากที่ได้รับมา
+- แต่ละกล่องเขียน 1-2 ประโยค บอกชัดว่าส่วนไหนเป็นเบาะแสจริง ส่วนไหนใส่มาเพื่อลวง
+- กล่องที่มีส่วนหลอก ให้ย้ำสั้น ๆ ว่าส่วนนั้นแต่งขึ้นเพื่อเกม ห้ามนำไปอ้างอิงจริง
+- ช่อง overall สรุปภาพรวม 2-4 ประโยค เน้นบทเรียนเรื่องการตรวจสอบข้อมูลก่อนเชื่อ
+- ห้ามแต่งข้อมูลใหม่นอกเหนือจากที่ได้รับ
 `.trim();
 
 const DEBRIEF_SCHEMA = {
   type: "object",
   properties: {
-    overall: { type: "string", description: "สรุปภาพรวมทั้งเกม ภาษาไทย 2-4 ประโยค" },
+    overall: { type: "string", description: "สรุปภาพรวม ภาษาไทย 2-4 ประโยค" },
     notes: {
       type: "array",
-      description: "คำอธิบายรายคำใบ้ เรียงตาม index ที่ได้รับมา",
+      description: "คำอธิบายรายกล่อง เรียงตาม index ที่ได้รับ",
       items: {
         type: "object",
         properties: {
-          index: { type: "integer", description: "index ของคำใบ้ตามที่ส่งมา" },
+          index: { type: "integer" },
           text: { type: "string", description: "คำอธิบายภาษาไทย 1-2 ประโยค" },
         },
         required: ["index", "text"],
@@ -63,24 +57,20 @@ const DEBRIEF_SCHEMA = {
 function fallbackNote(item: EnrichedItem): string {
   const base =
     item.truth === "จริง"
-      ? "คำใบ้ชุดนี้ถูกออกแบบให้เป็นเบาะแสจริงล้วน ชี้เข้าหาคำตอบโดยไม่เฉลยตรง ๆ"
-      : "คำใบ้ชุดนี้ตั้งใจผสมเบาะแสจริง 1 อย่างกับเบาะแสที่แต่งขึ้น 1 อย่าง " +
+      ? "กล่องนี้เป็นเบาะแสจริงล้วน ชี้เข้าหาคำตอบโดยไม่เฉลยตรง ๆ"
+      : "กล่องนี้ตั้งใจผสมเบาะแสจริง 1 อย่างกับเบาะแสที่แต่งขึ้น 1 อย่าง " +
         "เพื่อทดสอบว่าผู้เล่นจะแยกออกหรือไม่ ส่วนที่แต่งขึ้นห้ามนำไปอ้างอิงจริง";
   return `${base} (เหตุผลจากตอนสร้าง: ${item.rationale})`;
 }
 
 function fallbackOverall(body: DebriefApiRequest): string {
-  const winner =
-    body.player1Score === body.player2Score
-      ? "เสมอกัน"
-      : body.player1Score > body.player2Score
-        ? body.player1Name
-        : body.player2Name;
+  const list = (body.participants ?? [])
+    .map((p) => `${p.name} ${p.score} คะแนน`)
+    .join(" · ");
   return (
-    `จบเกมด้วยผล ${body.player1Name} ${body.player1Score} คะแนน และ ` +
-    `${body.player2Name} ${body.player2Score} คะแนน (${winner}) ` +
+    `ผลรวม: ${list || "—"} ` +
     "บทเรียนสำคัญของเกมนี้คือ คำใบ้ที่ฟังดูน่าเชื่อไม่ได้แปลว่าจริงเสมอไป " +
-    "ก่อนเชื่อควรถามว่าแหล่งข้อมูลนั้นตรวจสอบได้ไหม"
+    "ก่อนเชื่ออะไรควรถามว่าแหล่งข้อมูลนั้นตรวจสอบได้จริงไหม"
   );
 }
 
@@ -94,23 +84,19 @@ export async function POST(request: NextRequest) {
 
   const history = Array.isArray(body.hintHistory) ? body.hintHistory : [];
 
-  // เติม label จริง/หลอก + เหตุผลการออกแบบจาก store ฝั่งเซิร์ฟเวอร์
   const items: EnrichedItem[] = history.map((h, index) => {
     const question = getQuestionById(h.questionId);
     const record = h.revealToken ? openReveal(h.revealToken) : null;
-    const hint = record?.hints.find((x) => x.id === h.hintId);
+    const box = record?.boxes.find((b) => b.id === h.boxId);
     return {
       index,
       questionId: h.questionId,
       prompt: question?.prompt ?? h.questionId,
-      correctAnswer: question?.correctAnswer ?? "(ไม่ทราบ)",
-      player: h.player,
-      hintType: h.hintType,
-      hintText: h.aiGeneratedText,
+      boxLabel: h.boxLabel,
+      text: h.text,
+      truth: box?.truth ?? "ไม่ทราบ",
+      rationale: box?.rationale ?? "ไม่พบบันทึกเหตุผล (token หมดอายุหรือคีย์เปลี่ยน)",
       wasCorrect: h.wasCorrect,
-      truth: hint?.truth ?? (h.hintType === "ตรง" ? "จริง" : "หลอก"),
-      rationale: hint?.rationale ?? "ไม่พบบันทึกเหตุผล (token หมดอายุหรือคีย์เปลี่ยน)",
-      fromFinalDuel: h.fromFinalDuel === true,
     };
   });
 
@@ -124,11 +110,11 @@ export async function POST(request: NextRequest) {
     notes: items.map((item) => ({
       index: item.index,
       questionId: item.questionId,
-      hintType: item.hintType,
+      boxLabel: item.boxLabel,
       truth: item.truth,
-      hintText: item.hintText,
+      text: item.text,
       wasCorrect: item.wasCorrect,
-      text: noteText(item),
+      note: noteText(item),
     })),
   });
 
@@ -141,35 +127,28 @@ export async function POST(request: NextRequest) {
   }
 
   const userPrompt = [
-    `ผู้เล่น 1: ${body.player1Name} — ${body.player1Score} คะแนน`,
-    `ผู้เล่น 2: ${body.player2Name} — ${body.player2Score} คะแนน`,
+    "ผลคะแนน: " +
+      (body.participants ?? []).map((p) => `${p.name} ${p.score}`).join(" · "),
     "",
-    `รายการคำใบ้ที่ถูกขอไปทั้งหมด ${items.length} ชุด:`,
+    `กล่องคำใบ้ที่ถูกเปิดทั้งหมด ${items.length} กล่อง:`,
     ...items.map((item) =>
       [
-        `[index ${item.index}]`,
+        `[index ${item.index}] กล่อง ${item.boxLabel}`,
         `คำถาม: ${item.prompt}`,
-        `คำตอบที่ถูก: ${item.correctAnswer}`,
-        `ผู้ขอคำใบ้: ผู้เล่น ${item.player}`,
-        item.fromFinalDuel
-          ? "ที่มา: รอบ AI Duel Final — ระบบแจกคำใบ้ 3 ชุด (จริง 1 หลอก 2) พร้อมกัน " +
-            "ผู้เล่นไม่ได้เลือกโหมดเอง แต่เลือกว่าจะ 'เชื่อ' ชุดนี้"
-          : `โหมดที่ผู้เล่นเลือกขอ: ใบ้${item.hintType}`,
-        `สถานะจริง/หลอกของคำใบ้ (ข้อมูลภายใน): ${item.truth}`,
-        `ข้อความคำใบ้: ${item.hintText}`,
+        `สถานะจริง/หลอก (ข้อมูลภายใน): ${item.truth}`,
+        `ข้อความในกล่อง: ${item.text}`,
         `เหตุผลการออกแบบตอนสร้าง: ${item.rationale}`,
-        `ผลลัพธ์: ผู้เล่นตอบ${item.wasCorrect ? "ถูก" : "ผิด"}`,
+        `ผลลัพธ์: ผู้เล่นตอบ${item.wasCorrect ? "ถูก" : "ผิด/ไม่ได้คะแนนเต็ม"}`,
       ].join("\n"),
     ),
     "",
-    `เขียน notes ให้ครบทั้ง ${items.length} รายการ โดยใช้ index ตรงตามที่ระบุไว้ข้างบน`,
+    `เขียน notes ให้ครบทั้ง ${items.length} รายการ โดยใช้ index ตรงตามที่ระบุ`,
   ].join("\n");
 
   try {
     const message = await client.messages.create(
       {
         model: HINT_MODEL,
-        // เผื่อพื้นที่ให้ thinking token (max_tokens นับรวม thinking + ข้อความตอบกลับ)
         max_tokens: 16000,
         system: DEBRIEF_SYSTEM,
         messages: [{ role: "user", content: userPrompt }],
@@ -182,10 +161,7 @@ export async function POST(request: NextRequest) {
     );
 
     if (message.stop_reason === "refusal" || message.stop_reason === "max_tokens") {
-      console.warn(
-        `[/api/debrief] ใช้ข้อความสำรอง (stop_reason=${message.stop_reason})`,
-        message.stop_details,
-      );
+      console.warn(`[/api/debrief] ใช้ข้อความสำรอง (stop_reason=${message.stop_reason})`);
       return NextResponse.json(
         buildResponse(fallbackOverall(body), fallbackNote, "fallback"),
         { headers: { "Cache-Control": "no-store" } },
@@ -225,11 +201,7 @@ export async function POST(request: NextRequest) {
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
-    if (error instanceof Anthropic.APIError) {
-      console.error(`[/api/debrief] Anthropic API error ${error.status}:`, error.message);
-    } else {
-      console.error("[/api/debrief] สรุปผลไม่สำเร็จ:", error);
-    }
+    console.error("[/api/debrief] สรุปผลไม่สำเร็จ:", error);
     return NextResponse.json(
       buildResponse(fallbackOverall(body), fallbackNote, "fallback"),
       { headers: { "Cache-Control": "no-store" } },

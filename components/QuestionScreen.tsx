@@ -1,551 +1,814 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ScoreBoard from "./ScoreBoard";
 import TimerRing from "./TimerRing";
-import { nameOf, tokenOf, useGame } from "@/lib/gameStore";
-import { useCountdown } from "@/lib/useCountdown";
+import { useGame } from "@/lib/gameStore";
+import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
 import {
-  ANSWER_SECONDS,
-  MIN_SECONDS_AFTER_HINT,
+  BOX_COST_RATIO,
+  QUESTION_SECONDS,
   STAGE_LABEL,
-  STEAL_SECONDS,
-  activePlayerFor,
-  opponentOf,
-  scoreForAnswer,
-  scoreForSteal,
+  activeParticipantIndex,
+  hintMultiplier,
+  nameOfId,
 } from "@/lib/scoring";
+import { useCountdown } from "@/lib/useCountdown";
 import type {
+  GradeApiResponse,
   HintApiResponse,
-  HintType,
+  HintBox,
+  Participant,
   RevealApiResponse,
-  RevealedHint,
+  RevealedHintBox,
 } from "@/lib/types";
 
-type LocalPhase =
-  | "prompt"
-  | "answer"
-  | "hintPick"
-  | "hintLoading"
-  | "hintAnswer"
+type Local =
+  | "answering"
+  | "performing"
+  | "grading"
+  | "rating"
   | "steal"
   | "result";
 
-interface ActiveHint {
-  text: string;
-  revealToken: string;
-  hintId: string;
-  source: "claude" | "fallback";
-}
-
 interface Outcome {
-  choice: string | null;
-  correct: boolean;
+  answer: string | null;
+  quality: number;
   timedOut: boolean;
-  delta: number;
-}
-
-interface StealOutcome {
-  choice: string | null;
-  correct: boolean;
   points: number;
+  feedback?: string;
+  strengths?: string[];
+  improvements?: string[];
+  botRemark?: string;
 }
 
 export default function QuestionScreen() {
   const { state, dispatch } = useGame();
   const question = state.questions[state.currentQuestionIndex];
+  const activeIndex = activeParticipantIndex(
+    state.currentQuestionIndex,
+    state.participants.length,
+  );
+  const active: Participant | undefined = state.participants[activeIndex];
+  const others = state.participants.filter((p) => p.id !== active?.id);
 
-  const activePlayer = activePlayerFor(state.currentQuestionIndex);
-  const stealPlayer = opponentOf(activePlayer);
-
-  const [phase, setPhase] = useState<LocalPhase>("prompt");
-  const [hintType, setHintType] = useState<HintType | null>(null);
-  const [tokenSpent, setTokenSpent] = useState(false);
-  const [hint, setHint] = useState<ActiveHint | null>(null);
-  const [hintError, setHintError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Local>("answering");
+  const [boxes, setBoxes] = useState<HintBox[] | null>(null);
+  const [revealToken, setRevealToken] = useState<string | null>(null);
+  const [hintSource, setHintSource] = useState<"claude" | "fallback">("claude");
+  const [hintFailed, setHintFailed] = useState(false);
+  const [openedIds, setOpenedIds] = useState<string[]>([]);
+  const [useToken, setUseToken] = useState(false);
+  const [choice, setChoice] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [ratings, setRatings] = useState<number[]>([]);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
-  const [stealOutcome, setStealOutcome] = useState<StealOutcome | null>(null);
-  const [revealed, setRevealed] = useState<RevealedHint | null>(null);
+  const [revealed, setRevealed] = useState<RevealedHintBox[] | null>(null);
+  const [stealerId, setStealerId] = useState<string | null>(null);
+  const [stealResult, setStealResult] = useState<{ id: string; correct: boolean } | null>(
+    null,
+  );
+  const [botTurn, setBotTurn] = useState<BotTurn | null>(null);
 
-  const phaseRef = useRef<LocalPhase>(phase);
+  const phaseRef = useRef<Local>(phase);
   phaseRef.current = phase;
-
-  // กันกดซ้ำ/หมดเวลาชนกับการกดตอบ จนคิดคะแนนซ้ำ
-  const answeredRef = useRef(false);
-  const stolenRef = useRef(false);
-
-  const nextButtonRef = useRef<HTMLButtonElement | null>(null);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const resolvedRef = useRef(false);
+  const hintKeyRef = useRef<string | null>(null);
+  const nextBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const timer = useCountdown(() => {
-    const current = phaseRef.current;
-    if (current === "steal") {
-      submitSteal(null);
-    } else if (
-      current === "prompt" ||
-      current === "answer" ||
-      current === "hintPick" ||
-      current === "hintAnswer"
-    ) {
-      submitAnswer(null, true);
-    }
+    const p = phaseRef.current;
+    if (p === "answering" || p === "performing") void finish(true);
+    else if (p === "steal") endSteal(false);
   });
+  const { start: startTimer, stop: stopTimer } = timer;
 
-  const { start: startTimer, stop: stopTimer, pause: pauseTimer, resume: resumeTimer } =
-    timer;
+  const openedBoxes = (boxes ?? []).filter((b) => openedIds.includes(b.id));
+  const tokenSpent = useToken && openedIds.length > 0;
+  const paidBoxes = Math.max(0, openedIds.length - (tokenSpent ? 1 : 0));
+  const isBotTurn = active?.kind === "bot";
 
-  // รีเซ็ตทุกอย่างเมื่อเปลี่ยนข้อ
+  // ── รีเซ็ตต่อข้อ + เริ่มนาฬิกา 60 วิ (ไม่มีการหยุดพักระหว่างข้อ) ──────────
   useEffect(() => {
-    answeredRef.current = false;
-    stolenRef.current = false;
-    setPhase("prompt");
-    setHintType(null);
-    setTokenSpent(false);
-    setHint(null);
-    setHintError(null);
+    resolvedRef.current = false;
+    setPhase(question?.format === "performance" ? "performing" : "answering");
+    setOpenedIds([]);
+    setUseToken(false);
+    setChoice(null);
+    setText("");
+    setRatings([]);
     setOutcome(null);
-    setStealOutcome(null);
     setRevealed(null);
-    startTimer(ANSWER_SECONDS * 1000);
+    setStealerId(null);
+    setStealResult(null);
+    setBotTurn(null);
+    setBoxes(null);
+    setRevealToken(null);
+    setHintFailed(false);
+    startTimer(QUESTION_SECONDS * 1000);
     return () => stopTimer();
-  }, [state.currentQuestionIndex, startTimer, stopTimer]);
+  }, [state.currentQuestionIndex, question?.format, startTimer, stopTimer]);
 
-  // โฟกัสปุ่ม "ข้อถัดไป" ให้กด Enter ต่อได้ทันที
+  // ── โหลดกล่องคำใบ้ล่วงหน้าตั้งแต่ข้อเริ่ม เพื่อให้กดเปิดได้ทันที ──────────
   useEffect(() => {
-    if (phase === "result") nextButtonRef.current?.focus();
+    if (!question) return;
+    const key = `${state.currentQuestionIndex}-${question.id}`;
+    if (hintKeyRef.current === key) return;
+    hintKeyRef.current = key;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/hint", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questionId: question.id }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as HintApiResponse;
+        setBoxes(data.boxes);
+        setRevealToken(data.revealToken);
+        setHintSource(data.source);
+      } catch {
+        setHintFailed(true);
+      }
+    })();
+  }, [question, state.currentQuestionIndex]);
+
+  // ── โฟกัสปุ่มถัดไป ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (phase === "result") nextBtnRef.current?.focus();
   }, [phase]);
 
-  if (!question) return null;
-
-  const activeTokens = tokenOf(state, activePlayer);
-  const totalMain = state.questions.length;
-
-  function submitAnswer(choice: string | null, timedOut: boolean) {
-    if (answeredRef.current) return;
-    answeredRef.current = true;
-    stopTimer();
-    const correct = !timedOut && choice === question.correctAnswer;
-    const delta = scoreForAnswer({
-      pointValue: question.pointValue,
-      hintType,
-      tokenSpent,
-      correct,
-    });
-
-    dispatch({
-      type: "RESOLVE_ROUND",
-      payload: {
-        answeredChoice: choice,
-        hintType,
-        tokenSpent,
-        timedOut,
-        hint: hint
-          ? { text: hint.text, revealToken: hint.revealToken, hintId: hint.hintId }
-          : undefined,
-      },
-    });
-
-    setOutcome({ choice, correct, timedOut, delta });
-    if (hint) void loadReveal(hint);
-
-    if (correct) {
-      setPhase("result");
-    } else {
-      setPhase("steal");
-      startTimer(STEAL_SECONDS * 1000);
-    }
-  }
-
-  function submitSteal(choice: string | null) {
-    if (stolenRef.current) return;
-    stolenRef.current = true;
-    stopTimer();
-    const correct = choice === question.correctAnswer;
-    dispatch({ type: "RESOLVE_STEAL", payload: { stealChoice: choice } });
-    setStealOutcome({
-      choice,
-      correct,
-      points: scoreForSteal(question.pointValue, correct),
-    });
-    setPhase("result");
-  }
-
-  async function loadReveal(target: ActiveHint) {
+  const loadReveal = useCallback(async (token: string) => {
     try {
       const res = await fetch("/api/reveal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ revealToken: target.revealToken }),
+        body: JSON.stringify({ revealToken: token }),
       });
       if (!res.ok) return;
       const data = (await res.json()) as RevealApiResponse;
-      setRevealed(data.hints.find((h) => h.id === target.hintId) ?? null);
+      setRevealed(data.boxes);
     } catch {
-      /* ไม่เป็นไร — แค่ไม่โชว์ป้ายเฉลยคำใบ้ */
+      /* ไม่เป็นไร */
     }
+  }, []);
+
+  // ── จบข้อ ────────────────────────────────────────────────────────────────
+  const commit = useCallback(
+    (opts: {
+      answer: string | null;
+      quality: number;
+      timedOut: boolean;
+      feedback?: string;
+      strengths?: string[];
+      improvements?: string[];
+      remark?: string;
+    }) => {
+      if (!question || !active) return;
+      stopTimer();
+
+      const points = (() => {
+        if (opts.timedOut || opts.quality <= 0) return 0;
+        return Math.max(
+          0,
+          Math.round(question.pointValue * hintMultiplier(paidBoxes) * (opts.quality / 100)),
+        );
+      })();
+
+      dispatch({
+        type: "RESOLVE_ROUND",
+        payload: {
+          participantId: active.id,
+          answer: opts.answer,
+          quality: opts.quality,
+          boxesOpened: openedIds.length,
+          tokenSpent,
+          timedOut: opts.timedOut,
+          feedback: opts.feedback,
+          openedBoxes:
+            revealToken && openedBoxes.length > 0
+              ? openedBoxes.map((b) => ({
+                  boxId: b.id,
+                  boxLabel: b.label,
+                  text: b.text,
+                  revealToken,
+                }))
+              : undefined,
+        },
+      });
+
+      setOutcome({
+        answer: opts.answer,
+        quality: opts.quality,
+        timedOut: opts.timedOut,
+        points,
+        feedback: opts.feedback,
+        strengths: opts.strengths,
+        improvements: opts.improvements,
+        botRemark: opts.remark,
+      });
+      if (revealToken) void loadReveal(revealToken);
+
+      // แย่งตอบได้เฉพาะปรนัย และต้องยังมีเวลาเหลือในข้อนั้น
+      const canSteal =
+        question.format === "choice" &&
+        others.length > 0 &&
+        opts.quality < 60 &&
+        timer.remaining > 1500;
+
+      if (canSteal) {
+        setPhase("steal");
+        startTimer(timer.remaining);
+      } else {
+        setPhase("result");
+      }
+    },
+    [
+      question,
+      active,
+      others.length,
+      openedIds.length,
+      openedBoxes,
+      paidBoxes,
+      tokenSpent,
+      revealToken,
+      dispatch,
+      loadReveal,
+      startTimer,
+      stopTimer,
+      timer.remaining,
+    ],
+  );
+
+  const finish = useCallback(
+    // picked ส่งตรงมาจากปุ่มที่กด — อ่านจาก state ไม่ได้เพราะ React ยังไม่ re-render
+    // ทำให้ finish() ที่ถูกสร้างไว้รอบก่อนยังเห็น choice เป็นค่าเดิม
+    async (timedOut: boolean, picked?: string | null) => {
+      if (resolvedRef.current || !question) return;
+      resolvedRef.current = true;
+
+      if (question.format === "choice") {
+        const answer = picked !== undefined ? picked : choice;
+        commit({
+          answer,
+          quality: answer && answer === question.correctAnswer ? 100 : 0,
+          timedOut: timedOut && !answer,
+        });
+        return;
+      }
+
+      if (question.format === "open") {
+        const answer = textRef.current.trim();
+        if (!answer) {
+          commit({ answer: null, quality: 0, timedOut: true });
+          return;
+        }
+        stopTimer();
+        setPhase("grading");
+        try {
+          const res = await fetch("/api/grade", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ questionId: question.id, answer }),
+          });
+          const data = (await res.json()) as GradeApiResponse;
+          commit({
+            answer,
+            quality: data.score,
+            timedOut: false,
+            feedback: data.feedback,
+            strengths: data.strengths,
+            improvements: data.improvements,
+          });
+        } catch {
+          commit({
+            answer,
+            quality: 0,
+            timedOut: false,
+            feedback: "ตรวจคำตอบไม่สำเร็จ — ข้อนี้ยังไม่ได้คะแนน",
+          });
+        }
+        return;
+      }
+
+      // performance → ไปหน้าให้ดาว (ไม่จับเวลาช่วงให้คะแนน)
+      stopTimer();
+      resolvedRef.current = false;
+      setRatings(Array((others.length || 1) as number).fill(0));
+      setPhase("rating");
+    },
+    [question, choice, commit, others.length, stopTimer],
+  );
+
+  function submitRatings() {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    const valid = ratings.filter((r) => r > 0);
+    const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
+    commit({
+      answer: "แสดงสด",
+      quality: Math.round((avg / 5) * 100),
+      timedOut: false,
+      feedback: valid.length ? `คะแนนเฉลี่ย ${avg.toFixed(1)} / 5 ดาว` : "ไม่มีใครให้คะแนน",
+    });
   }
 
-  async function requestHint(type: HintType, useToken: boolean) {
-    setHintType(type);
-    setTokenSpent(type === "ตรง" && useToken);
-    setHintError(null);
-    setPhase("hintLoading");
-    pauseTimer();
-
-    try {
-      const res = await fetch("/api/hint", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          questionId: question.id,
-          correctAnswer: question.correctAnswer,
-          hintType: type,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as HintApiResponse;
-      const first = data.hints[0];
-      if (!first) throw new Error("empty");
-
-      setHint({
-        text: first.text,
-        revealToken: data.revealToken,
-        hintId: first.id,
-        source: data.source,
-      });
-      setPhase("hintAnswer");
-      resumeTimer(MIN_SECONDS_AFTER_HINT * 1000);
-    } catch {
-      // ขอคำใบ้ไม่สำเร็จ → ไม่คิดโทษผู้เล่น กลับไปตอบเองแบบไม่มีเงื่อนไข
-      setHintType(null);
-      setTokenSpent(false);
-      setHintError("ขอคำใบ้ไม่สำเร็จ — เล่นต่อโดยไม่ใช้คำใบ้ได้เลย");
-      setPhase("answer");
-      resumeTimer(MIN_SECONDS_AFTER_HINT * 1000);
+  function endSteal(correct: boolean) {
+    stopTimer();
+    if (stealerId) {
+      dispatch({ type: "RESOLVE_STEAL", participantId: stealerId, correct });
+      setStealResult({ id: stealerId, correct });
     }
+    setPhase("result");
   }
 
-  const showTimer = phase !== "result" && phase !== "hintLoading";
-  const timerTotal = phase === "steal" ? STEAL_SECONDS * 1000 : ANSWER_SECONDS * 1000;
+  function openBox(id: string) {
+    if (openedIds.includes(id)) return;
+    setOpenedIds((prev) => [...prev, id]);
+  }
+
+  // ── เทิร์นของบอท ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    // ครอบคลุม "performing" ด้วย ไม่งั้นข้อโชว์ความสามารถของบอทจะค้าง
+    // แล้วเด้งไปให้คนจริงกดดาวให้การแสดงที่ไม่เคยเกิดขึ้น
+    if (!isBotTurn || !question || (phase !== "answering" && phase !== "performing")) return;
+    const plan = planBotTurn(question, "ปกติ");
+    setBotTurn(plan);
+    const delay = Math.min(plan.thinkSeconds, QUESTION_SECONDS - 5) * 1000;
+    const id = window.setTimeout(() => {
+      if (resolvedRef.current) return;
+      resolvedRef.current = true;
+      if (plan.boxesOpened > 0 && boxes) {
+        setOpenedIds(boxes.slice(0, plan.boxesOpened).map((b) => b.id));
+      }
+      commit({
+        answer: plan.choice ?? "(บอทตอบ)",
+        quality: plan.quality,
+        timedOut: false,
+        remark: botRemark(plan, "ปกติ"),
+      });
+    }, delay);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBotTurn, state.currentQuestionIndex, phase, boxes]);
+
+  if (!question || !active) return null;
+
+  const totalQuestions = state.questions.length;
+  const isLast = state.currentQuestionIndex + 1 >= totalQuestions;
+  const remainingPct = Math.round(hintMultiplier(paidBoxes) * 100);
+  const formatLabel =
+    question.format === "choice"
+      ? "ปรนัย"
+      : question.format === "open"
+        ? "อัตนัย · พิมพ์ตอบ"
+        : "โชว์ความสามารถ";
 
   return (
     <div className="space-y-4">
-      <ScoreBoard activePlayer={phase === "steal" ? stealPlayer : activePlayer} />
+      <ScoreBoard activeId={phase === "steal" ? stealerId : active.id} />
 
-      {/* หัวข้อ / progress */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="chip bg-violet-500/20 text-violet-200">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="chip bg-indigo-500/20 text-indigo-200">
               {STAGE_LABEL[question.stage]}
             </span>
             <span className="chip bg-white/10 text-slate-300">{question.category}</span>
-            <span className="chip bg-amber-400/15 text-amber-200">
+            <span className="chip bg-sky-500/15 text-sky-200">{formatLabel}</span>
+            <span className="chip bg-teal-400/15 text-teal-200">{question.difficulty}</span>
+            <span className="chip bg-cyan-400/15 text-cyan-100">
               {question.pointValue} คะแนน
             </span>
           </div>
           <p className="mt-2 text-xs text-slate-400">
-            ข้อ {state.currentQuestionIndex + 1} / {totalMain} ·{" "}
+            ข้อ {state.currentQuestionIndex + 1} / {totalQuestions} ·{" "}
             <span className="font-semibold text-slate-200">
-              {phase === "steal"
-                ? `${nameOf(state, stealPlayer)} แย่งตอบ`
-                : `ตาของ ${nameOf(state, activePlayer)}`}
+              {phase === "steal" && stealerId
+                ? `${nameOfId(state.participants, stealerId)} แย่งตอบ`
+                : `ตาของ ${active.name}`}
             </span>
           </p>
         </div>
-        {showTimer ? (
-          <TimerRing
-            remaining={timer.remaining}
-            total={timerTotal}
-            label={phase === "steal" ? "แย่งตอบ" : "เวลาตอบ"}
-          />
-        ) : (
-          <TimerRing remaining={timer.remaining} total={timerTotal} paused label="พัก" />
-        )}
+        <TimerRing
+          remaining={timer.remaining}
+          total={QUESTION_SECONDS * 1000}
+          label={phase === "steal" ? "แย่งตอบ" : "เวลาที่เหลือ"}
+          paused={phase === "grading" || phase === "rating" || phase === "result"}
+        />
       </div>
 
-      {/* คำถาม */}
       <div className="panel animate-popIn p-5">
         <h2 className="text-xl font-bold leading-relaxed sm:text-2xl">{question.prompt}</h2>
+        {question.task ? (
+          <p className="mt-3 whitespace-pre-line rounded-xl bg-white/[0.05] p-3 text-sm leading-relaxed text-slate-300">
+            {question.task}
+          </p>
+        ) : null}
       </div>
 
-      {hintError ? (
-        <p className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          {hintError}
-        </p>
+      {/* ── กล่องคำใบ้ 4 กล่อง ─────────────────────────────────────────── */}
+      {(phase === "answering" || phase === "performing") && !isBotTurn ? (
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-200">
+              กล่องคำใบ้ · เปิดแล้ว {openedIds.length}/4
+            </h3>
+            <span
+              className={`chip ${
+                remainingPct === 100
+                  ? "bg-teal-400/15 text-teal-200"
+                  : remainingPct > 0
+                    ? "bg-sky-500/15 text-sky-200"
+                    : "bg-rose-500/20 text-rose-200"
+              }`}
+            >
+              เหลือ {remainingPct}% ของคะแนนข้อนี้
+            </span>
+          </div>
+
+          {active.tokens > 0 ? (
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100">
+              <input
+                type="checkbox"
+                checked={useToken}
+                onChange={(e) => setUseToken(e.target.checked)}
+                className="h-4 w-4 accent-cyan-400"
+              />
+              ใช้โทเคน 1 ชิ้น — กล่องแรกที่เปิดไม่หักคะแนน (มี {active.tokens} ชิ้น)
+            </label>
+          ) : null}
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(boxes ?? Array.from({ length: 4 })).map((box, i) => {
+              const b = box as HintBox | undefined;
+              const opened = b ? openedIds.includes(b.id) : false;
+              if (opened && b) {
+                return (
+                  <div
+                    key={b.id}
+                    className="animate-popIn rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
+                  >
+                    <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                      กล่อง {b.label}
+                    </span>
+                    <p className="mt-1.5 text-xs leading-relaxed text-white">{b.text}</p>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  key={b?.id ?? i}
+                  onClick={() => b && openBox(b.id)}
+                  disabled={!b}
+                  className="hint-box"
+                >
+                  <span className="text-2xl" aria-hidden="true">
+                    {b ? "🎁" : "⏳"}
+                  </span>
+                  <span className="text-xs font-bold text-sky-100">
+                    {b ? `กล่อง ${b.label}` : "กำลังเตรียม"}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {b ? `−${Math.round(BOX_COST_RATIO * 100)}%` : ""}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {hintFailed ? (
+            <p className="text-[11px] text-rose-300">
+              เตรียมกล่องคำใบ้ไม่สำเร็จ — ข้อนี้เล่นต่อได้โดยไม่มีคำใบ้
+            </p>
+          ) : hintSource === "fallback" && boxes ? (
+            <p className="text-[11px] text-cyan-200/70">
+              โหมดสำรอง (ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY)
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
-      {/* ── phase: prompt ─────────────────────────────────────────────── */}
-      {phase === "prompt" ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <button onClick={() => setPhase("answer")} className="btn-primary py-5 text-lg">
-            ตอบเลย
-          </button>
-          <button onClick={() => setPhase("hintPick")} className="btn-cyan py-5 text-lg">
-            ขอ AI ช่วย
+      {/* ── บอทกำลังคิด ─────────────────────────────────────────────────── */}
+      {isBotTurn && (phase === "answering" || phase === "performing") ? (
+        <div className="panel flex flex-col items-center gap-2 p-8 text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-teal-300" />
+          <p className="text-sm text-slate-300">
+            🤖 {active.name} {question.format === "performance" ? "กำลังโชว์" : "กำลังคิด"}...
+          </p>
+          <p className="text-[11px] text-slate-500">
+            บอทอาจเปิดกล่องคำใบ้ และก็โดนใบ้หลอกได้เหมือนกัน
+          </p>
+        </div>
+      ) : null}
+
+      {/* ── ปรนัย ───────────────────────────────────────────────────────── */}
+      {phase === "answering" && !isBotTurn && question.format === "choice" ? (
+        <div className="grid gap-2.5">
+          {(question.choices ?? []).map((c) => (
+            <button
+              key={c}
+              onClick={() => {
+                setChoice(c);
+                void finish(false, c);
+              }}
+              className="choice"
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ── อัตนัย ──────────────────────────────────────────────────────── */}
+      {phase === "answering" && !isBotTurn && question.format === "open" ? (
+        <div className="space-y-2">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            maxLength={1200}
+            placeholder="พิมพ์คำตอบของคุณ... (AI จะตรวจตามเกณฑ์ของข้อนี้)"
+            className="field min-h-[130px] resize-y leading-relaxed"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500">{text.length}/1200</span>
+            <button
+              onClick={() => void finish(false)}
+              disabled={!text.trim()}
+              className="btn-primary px-6 py-2.5 text-sm"
+            >
+              ส่งคำตอบ
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── โชว์ความสามารถ ──────────────────────────────────────────────── */}
+      {phase === "performing" && !isBotTurn ? (
+        <div className="panel space-y-3 p-5 text-center">
+          <p className="text-sm text-slate-300">
+            เริ่มแสดงได้เลย — จับเวลาอยู่ พอจบแล้วกดปุ่มด้านล่างเพื่อให้กรรมการให้คะแนน
+          </p>
+          <button onClick={() => void finish(false)} className="btn-teal w-full py-4 text-lg">
+            จบการแสดง → ให้คะแนน
           </button>
         </div>
       ) : null}
 
-      {/* ── phase: hintPick ───────────────────────────────────────────── */}
-      {phase === "hintPick" ? (
-        <div className="space-y-3">
-          <div className="panel space-y-3 p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-emerald-300">ใบ้ตรง</h3>
-              <span className="chip bg-emerald-500/15 text-emerald-200">
-                {tokenSpent ? "เต็ม 100%" : "ได้คะแนน 50%"}
-              </span>
-            </div>
-            <p className="text-sm leading-relaxed text-slate-300">
-              เบาะแสจริงที่ตรวจสอบได้ ใกล้เคียงคำตอบแต่ไม่เฉลยตรง ๆ
-              ถ้าตอบถูกหลังใบ้จะถูกหักคะแนนข้อนี้ครึ่งหนึ่ง
+      {/* ── ให้ดาว ──────────────────────────────────────────────────────── */}
+      {phase === "rating" ? (
+        <div className="panel space-y-4 p-5">
+          <h3 className="text-base font-bold text-white">กรรมการให้คะแนน</h3>
+          <p className="text-xs text-slate-400">
+            {others.length > 0
+              ? "ให้แต่ละฝ่ายกดดาว 1–5 ตามเกณฑ์ด้านล่าง"
+              : "โหมดเล่นคนเดียว — ประเมินตัวเองตามตรง"}
+          </p>
+          {question.rubric ? (
+            <p className="rounded-lg bg-white/[0.05] px-3 py-2 text-xs leading-relaxed text-slate-300">
+              <b className="text-slate-200">เกณฑ์:</b> {question.rubric}
             </p>
-            <label
-              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
-                activeTokens > 0
-                  ? "cursor-pointer border-amber-400/40 bg-amber-400/10 text-amber-100"
-                  : "border-stage-edge text-slate-500"
-              }`}
-            >
-              <input
-                type="checkbox"
-                disabled={activeTokens === 0}
-                checked={tokenSpent}
-                onChange={(e) => setTokenSpent(e.target.checked)}
-                className="h-4 w-4 accent-amber-400"
-              />
-              <span>
-                ใช้โทเคนคำใบ้ 1 ชิ้น เพื่อไม่ให้ถูกหัก 50% (มีอยู่ {activeTokens} ชิ้น)
-              </span>
-            </label>
-            <button
-              onClick={() => requestHint("ตรง", tokenSpent)}
-              className="btn-primary w-full"
-            >
-              ขอใบ้ตรง
-            </button>
-          </div>
+          ) : null}
 
-          <div className="panel space-y-3 p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-rose-300">ใบ้ลวง</h3>
-              <span className="chip bg-rose-500/15 text-rose-200">×2 / −×2</span>
-            </div>
-            <p className="text-sm leading-relaxed text-slate-300">
-              ประโยคเดียวที่ผสมเบาะแสจริงกับเบาะแสที่แต่งขึ้น
-              ไม่หักคะแนนตอนขอ แต่ตอบถูกได้ 2 เท่า ตอบผิดเสีย 2 เท่า
-            </p>
-            <button
-              onClick={() => requestHint("ลวง", false)}
-              className="btn w-full bg-gradient-to-r from-rose-600 to-orange-600 text-white
-                         hover:from-rose-500 hover:to-orange-500"
-            >
-              ขอใบ้ลวง
-            </button>
+          <div className="space-y-2.5">
+            {(others.length > 0 ? others : [active]).map((rater, i) => (
+              <div key={rater.id} className="flex items-center justify-between gap-3">
+                <span className="truncate text-sm text-slate-200">
+                  {others.length > 0 ? rater.name : "ประเมินตัวเอง"}
+                </span>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      onClick={() =>
+                        setRatings((prev) => {
+                          const next = [...prev];
+                          next[i] = star;
+                          return next;
+                        })
+                      }
+                      aria-label={`${rater.name} ให้ ${star} ดาว`}
+                      className={`h-9 w-9 rounded-lg border text-lg transition ${
+                        (ratings[i] ?? 0) >= star
+                          ? "border-cyan-300/70 bg-cyan-400/20"
+                          : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.08]"
+                      }`}
+                    >
+                      {(ratings[i] ?? 0) >= star ? "★" : "☆"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
 
           <button
-            onClick={() => {
-              setTokenSpent(false);
-              setPhase("answer");
-            }}
-            className="btn-ghost w-full"
+            onClick={submitRatings}
+            disabled={!ratings.some((r) => r > 0)}
+            className="btn-primary w-full"
           >
-            ไม่เอาแล้ว ตอบเอง
+            ยืนยันคะแนน
           </button>
         </div>
       ) : null}
 
-      {/* ── phase: hintLoading ────────────────────────────────────────── */}
-      {phase === "hintLoading" ? (
+      {/* ── กำลังตรวจ ───────────────────────────────────────────────────── */}
+      {phase === "grading" ? (
         <div className="panel flex flex-col items-center gap-3 p-8 text-center">
-          <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-white/15 border-t-cyan-300" />
-          <p className="text-sm text-slate-300">
-            กำลังให้ AI ร่างคำใบ้{hintType ? `แบบ "ใบ้${hintType}"` : ""}...
-          </p>
-          <p className="text-xs text-slate-500">นาฬิกาหยุดชั่วคราวระหว่างรอ</p>
+          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-sky-300" />
+          <p className="text-sm text-slate-300">AI กำลังตรวจคำตอบตามเกณฑ์ของข้อนี้...</p>
         </div>
       ) : null}
 
-      {/* ── phase: answer / hintAnswer ────────────────────────────────── */}
-      {phase === "answer" || phase === "hintAnswer" ? (
-        <div className="space-y-3">
-          {hint ? (
-            <div
-              className={`animate-popIn rounded-2xl border p-4 ${
-                hintType === "ลวง"
-                  ? "border-rose-400/40 bg-rose-500/10"
-                  : "border-emerald-400/40 bg-emerald-500/10"
-              }`}
-            >
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <span className="chip bg-white/10 text-slate-200">
-                  คำใบ้จาก AI · โหมด &ldquo;ใบ้{hintType}&rdquo;
-                </span>
-                {hint.source === "fallback" ? (
-                  <span className="chip bg-amber-400/15 text-amber-200">โหมดสำรอง</span>
-                ) : null}
-                {tokenSpent ? (
-                  <span className="chip bg-amber-400/15 text-amber-200">
-                    ใช้โทเคน · ไม่หักคะแนน
-                  </span>
-                ) : null}
-              </div>
-              <p className="text-base leading-relaxed text-white">{hint.text}</p>
-              <p className="mt-2 text-[11px] text-slate-400">
-                อย่าเพิ่งเชื่อทั้งหมด — ชั่งน้ำหนักกับสิ่งที่คุณรู้ก่อนตอบ
-              </p>
-            </div>
-          ) : null}
-
-          <div className="grid gap-2.5">
-            {question.choices.map((choice) => (
-              <button
-                key={choice}
-                onClick={() => submitAnswer(choice, false)}
-                className="choice"
-              >
-                {choice}
-              </button>
-            ))}
-          </div>
-
-          {phase === "answer" && !hint ? (
-            <button onClick={() => setPhase("hintPick")} className="btn-ghost w-full text-sm">
-              เปลี่ยนใจ — ขอ AI ช่วย
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* ── phase: steal ──────────────────────────────────────────────── */}
+      {/* ── แย่งตอบ ─────────────────────────────────────────────────────── */}
       {phase === "steal" ? (
         <div className="space-y-3">
-          <div className="animate-popIn rounded-2xl border border-amber-400/50 bg-amber-500/10 p-4 text-center">
-            <p className="text-sm text-amber-100">
-              {outcome?.timedOut ? "หมดเวลา!" : "ตอบผิด!"}{" "}
-              <b className="text-white">{nameOf(state, stealPlayer)}</b> มีสิทธิ์แย่งตอบ
-              — ตอบถูกได้ {question.pointValue} คะแนนเต็ม
-            </p>
+          <div className="animate-popIn rounded-2xl border border-cyan-300/50 bg-cyan-400/10 p-4 text-center text-sm text-cyan-50">
+            {outcome?.timedOut ? "หมดเวลา!" : "ตอบผิด!"} ใครแย่งตอบได้บ้าง —
+            ใช้เวลาที่เหลือของข้อนี้
           </div>
-          <div className="grid gap-2.5">
-            {question.choices.map((choice) => (
-              <button key={choice} onClick={() => submitSteal(choice)} className="choice">
-                {choice}
-              </button>
-            ))}
-          </div>
-          <button onClick={() => submitSteal(null)} className="btn-ghost w-full text-sm">
-            ขอผ่าน
+          {!stealerId ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {others.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setStealerId(p.id)}
+                  className="btn-ghost w-full"
+                >
+                  {p.kind === "bot" ? "🤖 " : ""}
+                  {p.name} ขอแย่งตอบ
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-2.5">
+              {(question.choices ?? []).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => endSteal(c === question.correctAnswer)}
+                  className="choice"
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={() => endSteal(false)} className="btn-ghost w-full text-sm">
+            ไม่มีใครแย่ง — ข้ามไป
           </button>
         </div>
       ) : null}
 
-      {/* ── phase: result ─────────────────────────────────────────────── */}
+      {/* ── ผลลัพธ์ ─────────────────────────────────────────────────────── */}
       {phase === "result" && outcome ? (
         <div className="animate-popIn space-y-3">
           <div
             className={`rounded-2xl border p-5 ${
-              outcome.correct
-                ? "border-emerald-400/50 bg-emerald-500/10"
+              outcome.points > 0
+                ? "border-teal-300/50 bg-teal-400/10"
                 : "border-rose-400/50 bg-rose-500/10"
             }`}
           >
             <p className="text-lg font-bold">
-              {outcome.correct
-                ? `✅ ${nameOf(state, activePlayer)} ตอบถูก`
-                : outcome.timedOut
-                  ? `⏱️ ${nameOf(state, activePlayer)} หมดเวลา`
-                  : `❌ ${nameOf(state, activePlayer)} ตอบผิด`}
+              {outcome.timedOut
+                ? `⏱️ ${active.name} หมดเวลา`
+                : outcome.points > 0
+                  ? `✅ ${active.name} ได้คะแนน`
+                  : `❌ ${active.name} ไม่ได้คะแนนข้อนี้`}
             </p>
-            <p className="mt-1 text-sm text-slate-300">
-              คำตอบที่ถูกคือ{" "}
-              <b className="text-white">{question.correctAnswer}</b>
-            </p>
+
+            {question.format === "choice" && question.correctAnswer ? (
+              <p className="mt-1 text-sm text-slate-300">
+                คำตอบที่ถูกคือ <b className="text-white">{question.correctAnswer}</b>
+              </p>
+            ) : null}
+            {outcome.feedback ? (
+              <p className="mt-1.5 text-sm leading-relaxed text-slate-300">
+                {outcome.feedback}
+              </p>
+            ) : null}
+            {outcome.botRemark ? (
+              <p className="mt-1 text-sm text-slate-400">🤖 {outcome.botRemark}</p>
+            ) : null}
+
+            {outcome.strengths?.length ? (
+              <ul className="mt-2 space-y-1 text-xs text-teal-200">
+                {outcome.strengths.map((s, i) => (
+                  <li key={i}>✔ {s}</li>
+                ))}
+              </ul>
+            ) : null}
+            {outcome.improvements?.length ? (
+              <ul className="mt-1 space-y-1 text-xs text-sky-200/80">
+                {outcome.improvements.map((s, i) => (
+                  <li key={i}>↗ {s}</li>
+                ))}
+              </ul>
+            ) : null}
+
             {question.explanation ? (
-              <p className="mt-1 text-sm leading-relaxed text-slate-400">
+              <p className="mt-2 text-sm leading-relaxed text-slate-400">
                 {question.explanation}
               </p>
             ) : null}
-            <p
-              className={`mt-3 tabular text-2xl font-extrabold ${
-                outcome.delta > 0
-                  ? "text-emerald-300"
-                  : outcome.delta < 0
-                    ? "text-rose-300"
-                    : "text-slate-400"
-              }`}
-            >
-              {outcome.delta > 0 ? "+" : ""}
-              {outcome.delta} คะแนน
-            </p>
+
+            <div className="mt-3 flex items-baseline gap-3">
+              <span
+                className={`tabular text-2xl font-extrabold ${
+                  outcome.points > 0 ? "text-teal-300" : "text-slate-400"
+                }`}
+              >
+                +{outcome.points}
+              </span>
+              {openedIds.length > 0 ? (
+                <span className="text-xs text-slate-500">
+                  (คุณภาพคำตอบ {outcome.quality}% · เปิด {openedIds.length} กล่อง
+                  {tokenSpent ? " · ใช้โทเคน 1" : ""} → เหลือ {remainingPct}%)
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500">
+                  (คุณภาพคำตอบ {outcome.quality}%)
+                </span>
+              )}
+            </div>
           </div>
 
-          {stealOutcome ? (
+          {stealResult ? (
             <div
-              className={`rounded-2xl border p-4 ${
-                stealOutcome.correct
-                  ? "border-cyan-400/50 bg-cyan-500/10"
+              className={`rounded-2xl border p-4 text-sm ${
+                stealResult.correct
+                  ? "border-cyan-300/50 bg-cyan-400/10"
                   : "border-stage-edge bg-white/[0.03]"
               }`}
             >
-              <p className="text-sm">
-                <b className="text-white">{nameOf(state, stealPlayer)}</b>{" "}
-                {stealOutcome.choice === null
-                  ? "ไม่ได้แย่งตอบ"
-                  : stealOutcome.correct
-                    ? "แย่งตอบถูก"
-                    : "แย่งตอบผิด"}{" "}
-                <span
-                  className={`tabular font-bold ${
-                    stealOutcome.points > 0 ? "text-cyan-300" : "text-slate-400"
-                  }`}
-                >
-                  {stealOutcome.points > 0 ? `+${stealOutcome.points}` : "+0"} คะแนน
-                </span>
-              </p>
+              <b className="text-white">{nameOfId(state.participants, stealResult.id)}</b>{" "}
+              {stealResult.correct ? "แย่งตอบถูก" : "แย่งตอบไม่สำเร็จ"}{" "}
+              <span
+                className={`tabular font-bold ${
+                  stealResult.correct ? "text-cyan-300" : "text-slate-400"
+                }`}
+              >
+                +{stealResult.correct ? question.pointValue : 0}
+              </span>
             </div>
           ) : null}
 
-          {hint ? (
+          {/* เฉลยกล่องทั้ง 4 */}
+          {revealed ? (
             <div className="panel space-y-2 p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold text-slate-200">
-                  เฉลยคำใบ้ที่ขอไป
-                </span>
-                {revealed ? (
-                  <span
-                    className={`chip ${
-                      revealed.truth === "จริง"
-                        ? "bg-emerald-500/20 text-emerald-200"
-                        : "bg-rose-500/20 text-rose-200"
+              <h3 className="text-sm font-bold text-slate-200">
+                เฉลยกล่องคำใบ้ทั้ง 4 กล่อง
+              </h3>
+              {revealed.map((b) => {
+                const wasOpened = openedIds.includes(b.id);
+                return (
+                  <div
+                    key={b.id}
+                    className={`rounded-xl border p-3 ${
+                      b.truth === "จริง"
+                        ? "border-teal-300/45 bg-teal-400/[0.08]"
+                        : "border-rose-400/40 bg-rose-500/[0.06]"
                     }`}
                   >
-                    {revealed.truth === "จริง" ? "เบาะแสจริงล้วน" : "มีส่วนที่หลอกปน"}
-                  </span>
-                ) : (
-                  <span className="chip bg-white/10 text-slate-400">กำลังเปิดเฉลย...</span>
-                )}
-              </div>
-              <p className="text-sm leading-relaxed text-slate-300">
-                &ldquo;{hint.text}&rdquo;
-              </p>
-              {revealed ? (
-                <p className="rounded-lg bg-white/[0.04] px-3 py-2 text-xs leading-relaxed text-slate-400">
-                  <b className="text-slate-300">ทำไมถึงใบ้แบบนี้:</b> {revealed.rationale}
-                </p>
-              ) : null}
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                      <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                        กล่อง {b.label}
+                      </span>
+                      <span
+                        className={`chip px-2 py-0.5 text-[10px] ${
+                          b.truth === "จริง"
+                            ? "bg-teal-400/25 text-teal-100"
+                            : "bg-rose-500/25 text-rose-100"
+                        }`}
+                      >
+                        {b.truth === "จริง" ? "✅ ใบ้จริง" : "🎭 ใบ้หลอก"}
+                      </span>
+                      {wasOpened ? (
+                        <span className="chip bg-sky-500/20 px-2 py-0.5 text-[10px] text-sky-100">
+                          คุณเปิดกล่องนี้
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-xs leading-relaxed text-white">{b.text}</p>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                      <b className="text-slate-300">ทำไมถึงใบ้แบบนี้:</b> {b.rationale}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           ) : null}
 
           <button
-            ref={nextButtonRef}
+            ref={nextBtnRef}
             onClick={() => dispatch({ type: "NEXT_QUESTION" })}
             className="btn-primary w-full py-4 text-lg"
           >
-            {state.currentQuestionIndex + 1 >= totalMain
-              ? "เข้าสู่ AI Duel Final"
-              : "ข้อถัดไป"}
+            {isLast ? "ดูสรุปผล" : "ข้อถัดไป"}
           </button>
         </div>
       ) : null}

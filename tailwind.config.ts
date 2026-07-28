@@ -19,15 +19,17 @@ const config: Config = {
         ],
       },
       colors: {
+        // โทนเย็น: กรมท่า-น้ำเงิน-ฟ้า
         stage: {
-          bg: "#080B1A",
-          panel: "#111634",
-          edge: "#242C5C",
+          bg: "#050B18",
+          panel: "#0B182E",
+          edge: "#1B3155",
         },
       },
       boxShadow: {
-        glow: "0 0 24px rgba(168, 85, 247, 0.35)",
-        "glow-cyan": "0 0 24px rgba(34, 211, 238, 0.35)",
+        glow: "0 0 24px rgba(56, 189, 248, 0.35)",
+        "glow-teal": "0 0 24px rgba(45, 212, 191, 0.32)",
+        "glow-indigo": "0 0 24px rgba(99, 102, 241, 0.32)",
       },
       keyframes: {
         popIn: {

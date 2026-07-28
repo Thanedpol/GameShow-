@@ -12,17 +12,22 @@
     @apply bg-stage-bg text-slate-100 font-thai antialiased;
   }
 
+  /* โทนเย็นล้วน: ฟ้า-เทอร์ควอยซ์-คราม */
   body {
     background-image:
-      radial-gradient(60rem 40rem at 15% -10%, rgba(168, 85, 247, 0.18), transparent 60%),
-      radial-gradient(50rem 36rem at 90% 0%, rgba(34, 211, 238, 0.14), transparent 60%),
-      radial-gradient(48rem 40rem at 50% 110%, rgba(236, 72, 153, 0.12), transparent 60%);
+      radial-gradient(60rem 40rem at 12% -8%, rgba(56, 189, 248, 0.16), transparent 62%),
+      radial-gradient(52rem 38rem at 92% 2%, rgba(45, 212, 191, 0.13), transparent 62%),
+      radial-gradient(50rem 42rem at 50% 108%, rgba(79, 70, 229, 0.15), transparent 62%);
     background-attachment: fixed;
     min-height: 100dvh;
   }
 
   button {
     -webkit-tap-highlight-color: transparent;
+  }
+
+  textarea {
+    field-sizing: content;
   }
 }
 
@@ -38,23 +43,23 @@
   }
 
   .btn-primary {
-    @apply btn bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white
-           shadow-glow hover:from-fuchsia-500 hover:to-violet-500;
+    @apply btn bg-gradient-to-r from-sky-500 to-indigo-600 text-white
+           shadow-glow hover:from-sky-400 hover:to-indigo-500;
+  }
+
+  .btn-teal {
+    @apply btn bg-gradient-to-r from-teal-400 to-cyan-500 text-slate-950
+           shadow-glow-teal hover:from-teal-300 hover:to-cyan-400;
   }
 
   .btn-ghost {
     @apply btn border border-stage-edge bg-white/5 text-slate-100 hover:bg-white/10;
   }
 
-  .btn-cyan {
-    @apply btn bg-gradient-to-r from-cyan-500 to-sky-600 text-slate-950
-           shadow-glow-cyan hover:from-cyan-400 hover:to-sky-500;
-  }
-
   .choice {
     @apply w-full rounded-xl border border-stage-edge bg-white/[0.04] px-4 py-4
            text-left text-base leading-relaxed transition-all duration-150
-           hover:border-fuchsia-400/70 hover:bg-white/[0.09]
+           hover:border-sky-400/70 hover:bg-white/[0.09]
            disabled:cursor-not-allowed disabled:hover:border-stage-edge
            disabled:hover:bg-white/[0.04];
   }
@@ -62,9 +67,24 @@
   .chip {
     @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold;
   }
+
+  .field {
+    @apply w-full rounded-xl border border-stage-edge bg-white/[0.04] px-4 py-3
+           text-base outline-none transition placeholder:text-slate-500
+           focus:border-sky-400 focus:bg-white/[0.07];
+  }
+
+  /* กล่องคำใบ้ที่ยังไม่เปิด */
+  .hint-box {
+    @apply relative flex min-h-[104px] flex-col items-center justify-center gap-1
+           rounded-2xl border-2 border-dashed border-sky-400/40
+           bg-gradient-to-br from-sky-500/10 to-indigo-500/10 p-3
+           text-center transition-all duration-150
+           hover:border-sky-300/80 hover:from-sky-500/20 hover:to-indigo-500/20
+           disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:border-sky-400/40;
+  }
 }
 
-/* ให้ตัวเลขนับถอยหลังไม่ขยับซ้ายขวาระหว่างนับ */
 .tabular {
   font-variant-numeric: tabular-nums;
 }

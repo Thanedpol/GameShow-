@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
 
   const response: RevealApiResponse = {
     questionId: payload.questionId,
-    hints: payload.hints,
+    boxes: payload.boxes,
   };
 
   return NextResponse.json(response, { headers: { "Cache-Control": "no-store" } });

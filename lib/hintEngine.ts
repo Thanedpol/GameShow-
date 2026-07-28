@@ -8,11 +8,8 @@ import {
   randomUUID,
 } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { HintType, Question, RevealedHint } from "./types";
-
-// ────────────────────────────────────────────────────────────────────────────
-// Anthropic client
-// ────────────────────────────────────────────────────────────────────────────
+import { HINT_BOX_COUNT } from "./scoring";
+import type { HintTruth, Question, RevealedHintBox } from "./types";
 
 export const HINT_MODEL = process.env.HINT_MODEL?.trim() || "claude-opus-5";
 
@@ -21,33 +18,23 @@ let cachedClient: Anthropic | null = null;
 export function getAnthropic(): Anthropic | null {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) return null;
-  if (!cachedClient) {
-    cachedClient = new Anthropic({ apiKey, maxRetries: 1 });
-  }
+  if (!cachedClient) cachedClient = new Anthropic({ apiKey, maxRetries: 1 });
   return cachedClient;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Reveal token — เก็บ label "จริง/หลอก" แบบ stateless
-//
-// เดิมเก็บไว้ใน Map บน globalThis ซึ่งใช้ได้เฉพาะตอนรันเป็น process เดียว
-// พอขึ้น serverless (Vercel) แต่ละ request อาจไปคนละ instance ทำให้หา revealId
-// ไม่เจอแบบสุ่ม ๆ จึงเปลี่ยนมา "เข้ารหัส payload ใส่ไปใน token" แทน
-// — client ถือ token ที่อ่านไม่ออก (AES-256-GCM) และปลอมไม่ได้ (auth tag)
-// — ไม่ต้องพึ่ง Redis/DB เพิ่ม และไม่มี state ค้างในเซิร์ฟเวอร์
+// Reveal token — เก็บ label "จริง/หลอก" แบบ stateless (ใช้ได้บน serverless)
 // ────────────────────────────────────────────────────────────────────────────
 
 export interface RevealPayload {
   questionId: string;
   createdAt: number;
-  hints: RevealedHint[];
+  boxes: RevealedHintBox[];
 }
 
-const REVEAL_TTL_MS = 60 * 60 * 1000; // 1 ชั่วโมง
+const REVEAL_TTL_MS = 60 * 60 * 1000;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
-
-/** ใช้เฉพาะตอน dev ที่ยังไม่มีคีย์อะไรเลย — ไม่ใช่ความลับ */
 const DEV_KEY_MATERIAL = "baijing-bailok-dev-only-key-material";
 
 let cachedKey: Buffer | null = null;
@@ -55,30 +42,22 @@ let warnedAboutDevKey = false;
 
 function getRevealKey(): Buffer {
   if (cachedKey) return cachedKey;
-
   const explicit = process.env.REVEAL_SECRET?.trim();
-  // ไม่มี REVEAL_SECRET ก็ derive จาก ANTHROPIC_API_KEY แทน (คงที่ทุก instance
-  // อยู่แล้ว) เพื่อให้ deploy ได้โดยไม่ต้องตั้ง env var เพิ่ม
   const fallback = process.env.ANTHROPIC_API_KEY?.trim();
   const material = explicit || fallback || DEV_KEY_MATERIAL;
 
   if (!explicit && !fallback && !warnedAboutDevKey) {
     warnedAboutDevKey = true;
-    console.warn(
-      "[reveal] ไม่พบ REVEAL_SECRET และ ANTHROPIC_API_KEY — ใช้คีย์ dev ชั่วคราว " +
-        "ห้ามใช้แบบนี้บน production",
-    );
+    console.warn("[reveal] ไม่พบ REVEAL_SECRET/ANTHROPIC_API_KEY — ใช้คีย์ dev ชั่วคราว");
   }
-
   cachedKey = Buffer.from(
     hkdfSync("sha256", material, "baijing-reveal-salt-v1", "reveal-token", 32),
   );
   return cachedKey;
 }
 
-/** เข้ารหัส label เป็น token ทึบ ๆ ที่ปลอดภัยพอจะส่งให้ client ถือไว้ */
-export function sealReveal(questionId: string, hints: RevealedHint[]): string {
-  const payload: RevealPayload = { questionId, createdAt: Date.now(), hints };
+export function sealReveal(questionId: string, boxes: RevealedHintBox[]): string {
+  const payload: RevealPayload = { questionId, createdAt: Date.now(), boxes };
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", getRevealKey(), iv);
   const body = Buffer.concat([
@@ -88,12 +67,10 @@ export function sealReveal(questionId: string, hints: RevealedHint[]): string {
   return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
 }
 
-/** ถอดรหัส token — คืน null ถ้าโดนแก้ ใช้คีย์คนละตัว หรือหมดอายุ */
 export function openReveal(token: string): RevealPayload | null {
   try {
     const raw = Buffer.from(token, "base64url");
     if (raw.length <= IV_BYTES + TAG_BYTES) return null;
-
     const decipher = createDecipheriv(
       "aes-256-gcm",
       getRevealKey(),
@@ -104,11 +81,10 @@ export function openReveal(token: string): RevealPayload | null {
       decipher.update(raw.subarray(IV_BYTES + TAG_BYTES)),
       decipher.final(),
     ]).toString("utf8");
-
     const payload = JSON.parse(json) as RevealPayload;
     if (
       typeof payload?.createdAt !== "number" ||
-      !Array.isArray(payload.hints) ||
+      !Array.isArray(payload.boxes) ||
       Date.now() - payload.createdAt > REVEAL_TTL_MS
     ) {
       return null;
@@ -124,105 +100,107 @@ export function openReveal(token: string): RevealPayload | null {
 // ────────────────────────────────────────────────────────────────────────────
 
 const SHARED_RULES = `
-ข้อกำหนดร่วมทุกกรณี:
-- เขียนเป็นภาษาไทย น้ำเสียงแบบพิธีกรเกมโชว์ กระชับ อ่านออกเสียงได้ลื่น
-- ความยาว 1 ประโยค (ไม่เกิน 2 ประโยคสั้น ๆ) ไม่เกิน 45 คำ
-- ห้ามเอ่ยข้อความของตัวเลือกใด ๆ แบบตรงตัว และห้ามพิมพ์คำตอบที่ถูกออกมาตรง ๆ
-- ห้ามอ้างถึงลำดับหรือตำแหน่งของตัวเลือก (เช่น "ข้อ 2" หรือ "ตัวเลือกสุดท้าย")
-- ห้ามบอกว่าส่วนไหนของคำใบ้จริงหรือหลอก และห้ามใส่คำเตือนใด ๆ ลงในคำใบ้
+ข้อกำหนดร่วม:
+- ภาษาไทย น้ำเสียงพิธีกรเกมโชว์ กระชับ อ่านออกเสียงลื่น
+- 1 ประโยค (ไม่เกิน 2 ประโยคสั้น) ไม่เกิน 45 คำ
+- ห้ามพิมพ์คำตอบที่ถูกออกมาตรง ๆ และห้ามพิมพ์ข้อความของตัวเลือกแบบตรงตัว
+- ห้ามอ้างลำดับหรือตำแหน่งของตัวเลือก
+- ห้ามบอกว่าคำใบ้นี้จริงหรือหลอก และห้ามใส่คำเตือนใด ๆ ลงในคำใบ้
 `.trim();
 
 const DIRECT_SYSTEM = `
-คุณคือ "ผู้ช่วยคำใบ้" ของเกมโชว์ตอบคำถามภาษาไทยชื่อ "ใบ้จริง...ใบ้หลอก"
-ภารกิจตอนนี้: สร้างคำใบ้แบบ "ใบ้ตรง"
+คุณคือผู้ช่วยคำใบ้ของเกมโชว์ไทย "ใบ้จริง...ใบ้หลอก" — ตอนนี้สร้าง "คำใบ้จริง"
 
-นิยามของ "ใบ้ตรง":
-- ต้องเป็นเบาะแสที่ตรวจสอบได้จริง เป็นข้อเท็จจริงที่ถูกต้อง 100% ห้ามแต่งข้อมูลขึ้นมา
-- ต้องเข้าใกล้คำตอบมากพอที่ผู้เล่นซึ่งมีความรู้พื้นฐานจะปะติดปะต่อได้
-- แต่ต้อง "ไม่เฉลยตรง ๆ" ผู้เล่นยังต้องคิดต่ออีกหนึ่งขั้น
-- เทคนิคที่ใช้ได้: บริบททางประวัติศาสตร์, ที่มาของคำ/ตัวย่อ, หน้าที่หรือกลไก, ตัวเลขที่เกี่ยวข้อง, การเปรียบเทียบกับสิ่งใกล้เคียง
+คำใบ้จริง:
+- เป็นเบาะแสที่ตรวจสอบได้ ถูกต้อง 100% ห้ามแต่งข้อมูล
+- ชี้ทางไปยังคำตอบ/แนวคำตอบที่ดีมากพอให้ผู้เล่นต่อจิ๊กซอว์เองได้
+- แต่ไม่เฉลยตรง ๆ ผู้เล่นต้องคิดต่ออีกขั้น
+- สำหรับคำถามอัตนัยหรือคำถามโชว์ความสามารถ ให้ชี้ไปที่ "หลักการ" ที่ทำให้คำตอบดี
+  เช่น มุมที่ควรพูดถึง ลำดับที่ควรทำ หรือกับดักที่คนมักพลาด
 
 ${SHARED_RULES}
 `.trim();
 
 const DECEPTIVE_SYSTEM = `
-คุณคือ "ผู้ช่วยคำใบ้" ของเกมโชว์ตอบคำถามภาษาไทยชื่อ "ใบ้จริง...ใบ้หลอก"
-ภารกิจตอนนี้: สร้างคำใบ้แบบ "ใบ้ลวง" สำหรับทดสอบทักษะการคิดวิเคราะห์ของผู้เล่น
+คุณคือผู้ช่วยคำใบ้ของเกมโชว์ไทย "ใบ้จริง...ใบ้หลอก" — ตอนนี้สร้าง "คำใบ้หลอก"
+เพื่อทดสอบทักษะการคิดวิเคราะห์ของผู้เล่น
 
-นิยามของ "ใบ้ลวง" — ประโยคเดียวที่ผสมสองอย่างเข้าด้วยกันอย่างแนบเนียน:
-  (ก) เบาะแสจริง 1 อย่าง — ข้อเท็จจริงที่ถูกต้องและเกี่ยวข้องกับคำตอบที่ถูก
-  (ข) เบาะแสหลอก 1 อย่าง — สร้างจากเรื่องสมมติที่ไม่เป็นอันตราย และชี้ไปยังตัวเลือกที่ผิด
-ทั้งสองส่วนต้องกลืนกันจนแยกยาก ผู้เล่นต้องใช้วิจารณญาณเองว่าจะเชื่อส่วนไหน
+คำใบ้หลอก คือประโยคเดียวที่ผสมสองอย่างจนแยกยาก:
+  (ก) เบาะแสจริง 1 อย่าง ที่ถูกต้องและเกี่ยวข้อง
+  (ข) เบาะแสหลอก 1 อย่าง ที่สร้างจากเรื่องสมมติไร้พิษภัย และชี้ไปผิดทาง
 
-ข้อห้ามด้านความปลอดภัย (สำคัญที่สุด ห้ามละเมิดเด็ดขาด):
-- ห้ามสร้างข้อมูลเท็จเกี่ยวกับ การแพทย์ สุขภาพ ยา การรักษา โภชนาการ กฎหมาย
-  หรือการเงิน/การลงทุน ที่ผู้ฟังอาจนำไปใช้จริงแล้วเกิดความเสียหาย
-- ถ้าคำถามอยู่ในหมวดที่อ่อนไหวเหล่านั้น ให้สร้างส่วน "หลอก" จาก trivia สมมติที่ไร้พิษภัยแทน
-  เช่น อ้างชื่อตำรา/รายการโทรทัศน์/ชมรม/ตัวละคร/เมืองที่ไม่มีอยู่จริง หรือ
-  "ธรรมเนียมของสมาคมสมมติ" โดยไม่แตะข้อเท็จจริงเชิงการแพทย์/การเงินที่คนนำไปอ้างอิงต่อได้
-- ห้ามพาดพิงบุคคล องค์กร หรือแบรนด์ที่มีอยู่จริงในเชิงให้ข้อมูลเท็จเกี่ยวกับเขา
-- ส่วนที่หลอกต้องเป็นเรื่องที่ "ตรวจสอบแล้วพบว่าไม่มีอยู่จริง" ไม่ใช่การบิดเบือนข้อเท็จจริงที่มีอยู่
+ข้อห้ามด้านความปลอดภัย (สำคัญที่สุด ห้ามละเมิด):
+- ห้ามสร้างข้อมูลเท็จเกี่ยวกับการแพทย์ สุขภาพ ยา การรักษา กฎหมาย
+  หรือการเงิน/การลงทุน ที่ผู้ฟังอาจนำไปใช้จริงแล้วเสียหาย
+- ถ้าคำถามอยู่ในหมวดอ่อนไหว ให้ทำส่วนหลอกจาก trivia สมมติแทน เช่น อ้างชื่อตำรา
+  รายการ ชมรม ตัวละคร หรือเมืองที่ไม่มีอยู่จริง โดยไม่แตะข้อเท็จจริงที่คนนำไปอ้างอิงต่อได้
+- ห้ามให้ข้อมูลเท็จเกี่ยวกับบุคคล องค์กร หรือแบรนด์ที่มีอยู่จริง
+- สำหรับคำถามชีวิตจริง/ที่ทำงาน ส่วนที่หลอกต้องเป็น "คำแนะนำที่ฟังดูดีแต่ใช้ไม่ได้จริง"
+  ไม่ใช่คำแนะนำที่ทำแล้วเกิดอันตรายต่อชีวิต ทรัพย์สิน หรือหน้าที่การงานอย่างร้ายแรง
 
 ${SHARED_RULES}
 `.trim();
 
-function buildUserPrompt(
-  question: Question,
-  correctAnswer: string,
-  variantNote?: string,
-): string {
+const DECEPTIVE_ANGLES = [
+  "เน้นมุมตัวเลข ปี หรือปริมาณ",
+  "เน้นมุมที่มาของคำ ตัวย่อ หรือความหมายเชิงภาษา",
+  "เน้นมุมบุคคล สถานที่ หรือเหตุการณ์ที่เกี่ยวข้อง",
+  "เน้นมุมลำดับขั้นตอนหรือวิธีปฏิบัติ",
+];
+
+function buildHintPrompt(question: Question, angle?: string): string {
   const lines = [
     `หมวด: ${question.category}`,
-    `ระดับ: ${question.stage} (${question.pointValue} คะแนน)`,
+    `ระดับความยาก: ${question.difficulty}`,
+    `รูปแบบคำถาม: ${
+      question.format === "choice"
+        ? "ปรนัย"
+        : question.format === "open"
+          ? "อัตนัย (ผู้เล่นพิมพ์ตอบ)"
+          : "โชว์ความสามารถ (ผู้เล่นต้องแสดงสด)"
+    }`,
     `คำถาม: ${question.prompt}`,
-    `ตัวเลือกทั้งหมด: ${question.choices.join(" | ")}`,
-    `คำตอบที่ถูกต้อง (ข้อมูลลับ ห้ามเปิดเผยในคำใบ้): ${correctAnswer}`,
   ];
-  if (question.explanation) {
-    lines.push(`บริบทเพิ่มเติมสำหรับคุณ: ${question.explanation}`);
+  if (question.choices) lines.push(`ตัวเลือก: ${question.choices.join(" | ")}`);
+  if (question.correctAnswer) {
+    lines.push(`คำตอบที่ถูก (ข้อมูลลับ ห้ามเปิดเผย): ${question.correctAnswer}`);
   }
-  if (variantNote) {
-    lines.push(`มุมที่ต้องใช้ในคำใบ้ชุดนี้: ${variantNote}`);
+  if (question.rubric) lines.push(`เกณฑ์ให้คะแนน (ข้อมูลลับ): ${question.rubric}`);
+  if (question.keyPoints?.length) {
+    lines.push(`ประเด็นที่คำตอบดีควรมี (ข้อมูลลับ): ${question.keyPoints.join(" / ")}`);
   }
+  if (question.explanation) lines.push(`บริบทเพิ่มเติม: ${question.explanation}`);
+  if (angle) lines.push(`มุมที่ต้องใช้ในคำใบ้ชุดนี้: ${angle}`);
   lines.push(
     "",
-    "สร้างคำใบ้ตามภารกิจ แล้วตอบกลับเป็น JSON ตามสคีมาที่กำหนด",
-    "โดย rationale ให้อธิบายสั้น ๆ เป็นภาษาไทยว่าทำไมคุณออกแบบคำใบ้นี้แบบนี้ " +
-      "(ข้อความนี้ใช้ภายในทีมงานเท่านั้น ผู้เล่นไม่เห็นระหว่างเกม)",
+    "สร้างคำใบ้ตามภารกิจ แล้วตอบเป็น JSON ตามสคีมา",
+    "rationale = อธิบายสั้น ๆ ว่าทำไมออกแบบคำใบ้นี้แบบนี้ (สำหรับทีมงานเท่านั้น)",
   );
   return lines.join("\n");
 }
 
-const HINT_JSON_SCHEMA = {
+const HINT_SCHEMA = {
   type: "object",
   properties: {
-    hint: {
-      type: "string",
-      description: "ตัวคำใบ้ที่จะอ่านให้ผู้เล่นฟัง ภาษาไทย 1-2 ประโยค",
-    },
-    rationale: {
-      type: "string",
-      description:
-        "เหตุผลเบื้องหลังการออกแบบคำใบ้นี้ ภาษาไทย 1-2 ประโยค สำหรับทีมงานเท่านั้น",
-    },
+    hint: { type: "string", description: "ตัวคำใบ้ ภาษาไทย 1-2 ประโยค" },
+    rationale: { type: "string", description: "เหตุผลการออกแบบ สำหรับทีมงาน" },
   },
   required: ["hint", "rationale"],
   additionalProperties: false,
 } as const;
 
 // ────────────────────────────────────────────────────────────────────────────
-// Claude call
+// Claude helpers
 // ────────────────────────────────────────────────────────────────────────────
 
 function extractText(message: Anthropic.Message): string {
   return message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
     .join("")
     .trim();
 }
 
-/** เผื่อกรณีโมเดลห่อ JSON ด้วย code fence หรือมีข้อความนำ */
 export function parseJsonLoose<T>(raw: string): T | null {
   if (!raw) return null;
   const cleaned = raw
@@ -248,60 +226,47 @@ interface HintPayload {
   rationale: string;
 }
 
-async function callClaudeForHint(
+async function callClaudeJson<T>(
   system: string,
   userPrompt: string,
-): Promise<HintPayload | null> {
+  schema: Record<string, unknown>,
+  maxTokens: number,
+  tag: string,
+): Promise<T | null> {
   const client = getAnthropic();
   if (!client) return null;
-
   try {
     const message = await client.messages.create(
       {
         model: HINT_MODEL,
-        // เผื่อพื้นที่ให้ thinking token ด้วย (บนโมเดลรุ่นใหม่ thinking เปิดอยู่โดยดีฟอลต์
-        // และ max_tokens นับรวม thinking + ข้อความตอบกลับ)
-        max_tokens: 8000,
+        max_tokens: maxTokens,
         system,
         messages: [{ role: "user", content: userPrompt }],
-        output_config: {
-          effort: "low",
-          format: { type: "json_schema", schema: HINT_JSON_SCHEMA },
-        },
+        output_config: { effort: "low", format: { type: "json_schema", schema } },
       },
-      { timeout: 30_000 },
+      { timeout: 40_000 },
     );
-
     if (message.stop_reason === "refusal") {
-      console.warn("[hint] Claude ปฏิเสธคำขอ:", message.stop_details);
+      console.warn(`[${tag}] Claude ปฏิเสธคำขอ:`, message.stop_details);
       return null;
     }
     if (message.stop_reason === "max_tokens") {
-      console.warn("[hint] คำตอบถูกตัดกลางคัน (max_tokens) — ใช้คำใบ้สำรองแทน");
+      console.warn(`[${tag}] คำตอบถูกตัดกลางคัน (max_tokens)`);
       return null;
     }
-
-    const parsed = parseJsonLoose<HintPayload>(extractText(message));
-    if (!parsed?.hint) {
-      console.warn("[hint] แปลง JSON จากโมเดลไม่สำเร็จ — ใช้คำใบ้สำรองแทน");
-      return null;
-    }
-    return {
-      hint: parsed.hint.trim(),
-      rationale: (parsed.rationale ?? "").trim() || "ไม่มีคำอธิบายจากโมเดล",
-    };
+    return parseJsonLoose<T>(extractText(message));
   } catch (error) {
     if (error instanceof Anthropic.APIError) {
-      console.error(`[hint] Anthropic API error ${error.status}:`, error.message);
+      console.error(`[${tag}] Anthropic API error ${error.status}:`, error.message);
     } else {
-      console.error("[hint] เรียก Claude ไม่สำเร็จ:", error);
+      console.error(`[${tag}] เรียก Claude ไม่สำเร็จ:`, error);
     }
     return null;
   }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Fallback (ไม่มี ANTHROPIC_API_KEY หรือ API ล่ม → เกมยังเล่นต่อได้)
+// โหมดสำรอง (ไม่มี API key หรือ API ล่ม)
 // ────────────────────────────────────────────────────────────────────────────
 
 const FICTIONAL_SOURCES = [
@@ -315,137 +280,266 @@ function firstGrapheme(text: string): string {
   return Array.from(text)[0] ?? "?";
 }
 
-function wrongChoiceFor(question: Question, correctAnswer: string, seed: number): string {
-  const wrong = question.choices.filter((c) => c !== correctAnswer);
-  if (wrong.length === 0) return "ตัวเลือกอื่น";
-  return wrong[seed % wrong.length];
+/** ตัดเกณฑ์ให้คะแนนเป็นวลีสั้น ๆ เพื่อให้แต่ละกล่องได้เบาะแสคนละมุม */
+function rubricFragments(question: Question): string[] {
+  const fromKeyPoints = question.keyPoints ?? [];
+  if (fromKeyPoints.length > 0) return fromKeyPoints;
+  return (question.rubric ?? "")
+    .split(/[,()]|\(\d\)|\s\d\)\s/)
+    .map((s) => s.replace(/^[\s\d).]+/, "").trim())
+    .filter((s) => s.length >= 12)
+    .slice(0, 6);
 }
 
-function fallbackDirect(question: Question, correctAnswer: string): HintPayload {
-  const chars = Array.from(correctAnswer).length;
+function fallbackTrue(question: Question, seed: number): HintPayload {
+  if (question.correctAnswer) {
+    const answer = question.correctAnswer;
+    const chars = Array.from(answer).length;
+    const words = answer.trim().split(/\s+/).length;
+    const hasDigit = /\d/.test(answer);
+    // สลับมุมตามลำดับกล่อง เพื่อไม่ให้สองกล่องได้ข้อความซ้ำกัน
+    const variants = [
+      `เบาะแสจริง: คำตอบขึ้นต้นด้วยอักษร “${firstGrapheme(answer)}” และยาว ${chars} ตัวอักษร`,
+      `เบาะแสจริง: คำตอบข้อนี้${hasDigit ? "มีตัวเลขอยู่ด้วย" : "ไม่มีตัวเลขอยู่เลย"} และแบ่งได้เป็น ${words} ส่วน`,
+      `เบาะแสจริง: ในบรรดาตัวเลือกทั้งหมด คำตอบที่ถูกคือตัวที่เกี่ยวข้องกับหมวด${question.category}มากที่สุด`,
+      `เบาะแสจริง: ถ้าเรียงตัวเลือกตามตัวอักษร คำตอบที่ถูกขึ้นต้นด้วย “${firstGrapheme(answer)}”`,
+    ];
+    return {
+      hint: variants[seed % variants.length],
+      rationale: "โหมดสำรอง — ใช้คุณสมบัติของคำตอบที่ตรวจสอบได้จริงแต่ยังไม่เฉลยตรง ๆ",
+    };
+  }
+
+  const fragments = rubricFragments(question);
+  const point = fragments.length ? fragments[seed % fragments.length] : null;
   return {
-    hint:
-      `เบาะแสจริง: คำตอบอยู่ในหมวด${question.category} ขึ้นต้นด้วยอักษร “${firstGrapheme(
-        correctAnswer,
-      )}” ` + `และมีความยาวรวม ${chars} ตัวอักษร`,
-    rationale:
-      "โหมดสำรอง (ไม่มี ANTHROPIC_API_KEY) — ใช้คุณสมบัติของตัวคำตอบที่ตรวจสอบได้จริง " +
-      "แต่ยังไม่เฉลยตรง ๆ",
+    hint: point
+      ? `เบาะแสจริง: กรรมการมองหา “${point}” เป็นหลัก`
+      : `เบาะแสจริง: คำตอบที่ได้คะแนนดีมักลงรายละเอียดเป็นรูปธรรมมากกว่าพูดกว้าง ๆ`,
+    rationale: "โหมดสำรอง — หยิบประเด็นจริงจากเกณฑ์มาชี้ทางโดยไม่ให้คำตอบสำเร็จรูป",
   };
 }
 
-function fallbackDeceptive(
-  question: Question,
-  correctAnswer: string,
-  seed: number,
-): HintPayload {
-  const decoy = wrongChoiceFor(question, correctAnswer, seed);
+function fallbackFalse(question: Question, seed: number): HintPayload {
   const source = FICTIONAL_SOURCES[seed % FICTIONAL_SOURCES.length];
+  if (question.choices && question.correctAnswer) {
+    const wrong = question.choices.filter((c) => c !== question.correctAnswer);
+    const decoy = wrong[seed % (wrong.length || 1)] ?? "ตัวเลือกอื่น";
+    return {
+      hint: `คำตอบขึ้นต้นด้วยอักษร “${firstGrapheme(
+        question.correctAnswer,
+      )}” ขณะที่${source}บันทึกว่าคำเฉลยข้อนี้คือ “${decoy}”`,
+      rationale:
+        "โหมดสำรอง — ผสมเบาะแสจริง (อักษรขึ้นต้น) กับแหล่งอ้างอิงสมมติที่ไม่มีอยู่จริง",
+    };
+  }
+  const fragments = rubricFragments(question);
+  const real = fragments.length
+    ? `“${fragments[seed % fragments.length]}” เป็นสิ่งที่กรรมการมองหาจริง`
+    : "ความเป็นรูปธรรมเป็นสิ่งที่กรรมการมองหาจริง";
+  const bogus = [
+    "คำตอบที่ได้คะแนนสูงสุดคือคำตอบที่สั้นที่สุดเท่านั้น",
+    "ห้ามยกตัวอย่างประกอบเด็ดขาด เพราะถือเป็นการออกนอกประเด็น",
+    "ต้องเริ่มประโยคแรกด้วยคำถามเสมอ ไม่งั้นถูกตัดคะแนนครึ่งหนึ่ง",
+    "กรรมการให้คะแนนจากจำนวนหัวข้อย่อยเป็นหลัก ไม่ได้ดูเนื้อหา",
+  ];
   return {
-    hint:
-      `คำตอบขึ้นต้นด้วยอักษร “${firstGrapheme(correctAnswer)}” ` +
-      `ขณะที่${source}บันทึกไว้ว่าคำเฉลยของข้อนี้คือ “${decoy}”`,
+    hint: `${real} แต่${source}ยืนยันว่า${bogus[seed % bogus.length]}`,
     rationale:
-      "โหมดสำรอง (ไม่มี ANTHROPIC_API_KEY) — ผสมเบาะแสจริง 1 อย่าง (อักษรขึ้นต้น) " +
-      "กับเบาะแสหลอกที่อ้างแหล่งข้อมูลสมมติซึ่งไม่มีอยู่จริง จึงไม่สร้างข้อมูลเท็จที่เป็นอันตราย",
+      "โหมดสำรอง — ครึ่งแรกจริง ครึ่งหลังเป็นคำแนะนำที่ฟังดูดีแต่ใช้ไม่ได้ อ้างแหล่งสมมติ",
   };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Public API
+// สร้างกล่องคำใบ้ 4 กล่อง
 // ────────────────────────────────────────────────────────────────────────────
 
-const DECEPTIVE_VARIANTS = [
-  "เน้นมุมตัวเลข ปี พ.ศ./ค.ศ. หรือปริมาณ",
-  "เน้นมุมที่มาของคำ ตัวย่อ หรือความหมายเชิงภาษา",
-  "เน้นมุมบุคคล สถานที่ หรือเหตุการณ์ที่เกี่ยวข้อง",
-];
+const BOX_LABELS = ["A", "B", "C", "D"];
 
-export interface GenerateResult {
-  hints: RevealedHint[];
+export interface HintBoxResult {
+  boxes: RevealedHintBox[];
   source: "claude" | "fallback";
 }
 
-/** สร้างคำใบ้ 1 ชุด สำหรับโหมด "ตรง" หรือ "ลวง" */
-export async function generateSingleHint(
-  question: Question,
-  correctAnswer: string,
-  mode: HintType,
-): Promise<GenerateResult> {
-  const system = mode === "ตรง" ? DIRECT_SYSTEM : DECEPTIVE_SYSTEM;
-  const user = buildUserPrompt(question, correctAnswer);
-  const payload = await callClaudeForHint(system, user);
-
-  const seed = Math.floor(Math.random() * 997);
-  const resolved =
-    payload ??
-    (mode === "ตรง"
-      ? fallbackDirect(question, correctAnswer)
-      : fallbackDeceptive(question, correctAnswer, seed));
-
-  return {
-    source: payload ? "claude" : "fallback",
-    hints: [
-      {
-        id: randomUUID(),
-        text: resolved.hint,
-        // "ใบ้ตรง" = เบาะแสจริงล้วน / "ใบ้ลวง" = มีส่วนที่หลอกปนอยู่
-        truth: mode === "ตรง" ? "จริง" : "หลอก",
-        mode,
-        rationale: resolved.rationale,
-      },
-    ],
-  };
-}
-
 /**
- * AI Duel Final — สร้าง 3 ชุดพร้อมกัน (1 จริง + 2 หลอกจากคนละ prompt)
- * แล้วสลับลำดับแบบสุ่ม เพื่อไม่ให้เดาได้จากตำแหน่ง
+ * สร้าง 4 กล่อง โดยบังคับให้มีทั้งจริงและหลอกอย่างน้อยอย่างละ 1
+ * (สัดส่วนสุ่มเป็น 1:3, 2:2 หรือ 3:1) แล้วสลับตำแหน่งก่อนติดป้าย A-D
  */
-export async function generateFinalHints(
-  question: Question,
-  correctAnswer: string,
-): Promise<GenerateResult> {
-  const seed = Math.floor(Math.random() * 997);
+export async function generateHintBoxes(question: Question): Promise<HintBoxResult> {
+  const trueCount = 1 + Math.floor(Math.random() * (HINT_BOX_COUNT - 1)); // 1..3
+  const plan: HintTruth[] = [
+    ...Array<HintTruth>(trueCount).fill("จริง"),
+    ...Array<HintTruth>(HINT_BOX_COUNT - trueCount).fill("หลอก"),
+  ];
 
-  const jobs: Array<Promise<{ payload: HintPayload | null; mode: HintType; index: number }>> =
-    [
-      callClaudeForHint(DIRECT_SYSTEM, buildUserPrompt(question, correctAnswer)).then(
-        (payload) => ({ payload, mode: "ตรง" as HintType, index: 0 }),
-      ),
-      callClaudeForHint(
-        DECEPTIVE_SYSTEM,
-        buildUserPrompt(question, correctAnswer, DECEPTIVE_VARIANTS[0]),
-      ).then((payload) => ({ payload, mode: "ลวง" as HintType, index: 1 })),
-      callClaudeForHint(
-        DECEPTIVE_SYSTEM,
-        buildUserPrompt(question, correctAnswer, DECEPTIVE_VARIANTS[1]),
-      ).then((payload) => ({ payload, mode: "ลวง" as HintType, index: 2 })),
-    ];
+  let deceptiveIndex = 0;
+  const jobs = plan.map(async (truth, index) => {
+    const angle =
+      truth === "หลอก"
+        ? DECEPTIVE_ANGLES[deceptiveIndex++ % DECEPTIVE_ANGLES.length]
+        : undefined;
+    const payload = await callClaudeJson<HintPayload>(
+      truth === "จริง" ? DIRECT_SYSTEM : DECEPTIVE_SYSTEM,
+      buildHintPrompt(question, angle),
+      HINT_SCHEMA,
+      6000,
+      "hint",
+    );
+    return { truth, index, payload: payload?.hint ? payload : null };
+  });
 
   const settled = await Promise.all(jobs);
   const usedFallback = settled.some((s) => s.payload === null);
 
-  const hints: RevealedHint[] = settled.map(({ payload, mode, index }) => {
+  const boxes: RevealedHintBox[] = settled.map(({ truth, index, payload }) => {
     const resolved =
       payload ??
-      (mode === "ตรง"
-        ? fallbackDirect(question, correctAnswer)
-        : fallbackDeceptive(question, correctAnswer, seed + index));
+      (truth === "จริง" ? fallbackTrue(question, index) : fallbackFalse(question, index));
     return {
       id: randomUUID(),
+      label: "",
       text: resolved.hint,
-      truth: mode === "ตรง" ? "จริง" : "หลอก",
-      mode,
+      truth,
       rationale: resolved.rationale,
     };
   });
 
-  // Fisher-Yates — สลับตำแหน่งไม่ให้ชุดจริงอยู่ที่เดิมเสมอ
-  for (let i = hints.length - 1; i > 0; i -= 1) {
+  // สลับตำแหน่งก่อน แล้วค่อยติดป้าย A-D เพื่อไม่ให้เดาได้จากลำดับที่สร้าง
+  for (let i = boxes.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
-    [hints[i], hints[j]] = [hints[j], hints[i]];
+    [boxes[i], boxes[j]] = [boxes[j], boxes[i]];
+  }
+  boxes.forEach((box, i) => {
+    box.label = BOX_LABELS[i] ?? String(i + 1);
+  });
+
+  return { boxes, source: usedFallback ? "fallback" : "claude" };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ตรวจคำตอบอัตนัย
+// ────────────────────────────────────────────────────────────────────────────
+
+const GRADE_SYSTEM = `
+คุณคือกรรมการของเกมโชว์ไทย ทำหน้าที่ตรวจคำตอบแบบอัตนัยอย่างเป็นธรรมและให้กำลังใจ
+
+หลักการให้คะแนน:
+- ยึดตาม rubric ที่ได้รับเป็นหลัก ไม่เอาความชอบส่วนตัวมาตัดสิน
+- ให้คะแนนตามสาระที่ตอบได้ ไม่ตัดคะแนนเพราะสำนวนหรือการสะกด
+- คำตอบสั้นแต่ตรงประเด็นควรได้คะแนนดีกว่าคำตอบยาวที่วนไปมา
+- ถ้าคำตอบว่างเปล่า ไม่เกี่ยวกับคำถาม หรือเป็นการมั่ว ให้ 0-10
+- ให้ feedback ที่นำไปใช้พัฒนาต่อได้จริง ไม่ใช่คำชมลอย ๆ
+- ภาษาไทย กระชับ
+`.trim();
+
+const GRADE_SCHEMA = {
+  type: "object",
+  properties: {
+    score: { type: "integer", description: "คะแนน 0-100 ตาม rubric" },
+    feedback: { type: "string", description: "สรุปผลการตรวจ 1-2 ประโยค ภาษาไทย" },
+    strengths: {
+      type: "array",
+      description: "สิ่งที่ทำได้ดี 1-3 ข้อ",
+      items: { type: "string" },
+    },
+    improvements: {
+      type: "array",
+      description: "สิ่งที่ควรเพิ่ม 1-3 ข้อ",
+      items: { type: "string" },
+    },
+  },
+  required: ["score", "feedback", "strengths", "improvements"],
+  additionalProperties: false,
+} as const;
+
+export interface GradeResult {
+  score: number;
+  feedback: string;
+  strengths: string[];
+  improvements: string[];
+  source: "claude" | "fallback";
+}
+
+/** ตรวจแบบหยาบ ๆ ตอนไม่มี API key — นับว่าแตะประเด็นสำคัญกี่ข้อ */
+function fallbackGrade(question: Question, answer: string): GradeResult {
+  const text = answer.trim();
+  if (text.length < 10) {
+    return {
+      score: 0,
+      feedback: "คำตอบสั้นเกินกว่าจะประเมินได้",
+      strengths: [],
+      improvements: ["ลองเขียนให้ครบว่าจะทำอะไร กับใคร และเพราะอะไร"],
+      source: "fallback",
+    };
+  }
+  const points = question.keyPoints ?? [];
+  const hit = points.filter((p) =>
+    Array.from(p.matchAll(/[฀-๿a-zA-Z]{3,}/g))
+      .slice(0, 3)
+      .some((m) => text.includes(m[0])),
+  );
+  const coverage = points.length > 0 ? hit.length / points.length : 0.5;
+  const lengthBonus = Math.min(0.25, text.length / 1200);
+  const score = Math.round(Math.min(100, (coverage * 0.75 + lengthBonus) * 100));
+  return {
+    score,
+    feedback:
+      `โหมดสำรอง (ไม่มี ANTHROPIC_API_KEY) — ประเมินหยาบ ๆ จากการแตะประเด็นสำคัญ ` +
+      `${hit.length}/${points.length} ข้อ`,
+    strengths: hit.map((p) => `พูดถึง: ${p}`),
+    improvements: points.filter((p) => !hit.includes(p)).map((p) => `ยังไม่ได้พูดถึง: ${p}`),
+    source: "fallback",
+  };
+}
+
+export async function gradeOpenAnswer(
+  question: Question,
+  answer: string,
+): Promise<GradeResult> {
+  if (!answer.trim()) {
+    return {
+      score: 0,
+      feedback: "ไม่ได้ตอบภายในเวลา",
+      strengths: [],
+      improvements: [],
+      source: "fallback",
+    };
   }
 
-  return { hints, source: usedFallback ? "fallback" : "claude" };
+  const userPrompt = [
+    `คำถาม: ${question.prompt}`,
+    `หมวด: ${question.category} · ระดับ: ${question.difficulty}`,
+    question.rubric ? `เกณฑ์ให้คะแนน: ${question.rubric}` : "",
+    question.keyPoints?.length
+      ? `ประเด็นที่คำตอบดีควรมี: ${question.keyPoints.join(" / ")}`
+      : "",
+    "",
+    "คำตอบของผู้เล่น:",
+    `"""${answer.trim()}"""`,
+    "",
+    "ตรวจแล้วตอบเป็น JSON ตามสคีมา",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const parsed = await callClaudeJson<{
+    score?: number;
+    feedback?: string;
+    strengths?: string[];
+    improvements?: string[];
+  }>(GRADE_SYSTEM, userPrompt, GRADE_SCHEMA, 6000, "grade");
+
+  if (!parsed || typeof parsed.score !== "number") {
+    return fallbackGrade(question, answer);
+  }
+
+  return {
+    score: Math.max(0, Math.min(100, Math.round(parsed.score))),
+    feedback: parsed.feedback?.trim() || "ตรวจเรียบร้อย",
+    strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 3) : [],
+    improvements: Array.isArray(parsed.improvements)
+      ? parsed.improvements.slice(0, 3)
+      : [],
+    source: "claude",
+  };
 }
