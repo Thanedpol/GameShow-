@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import RoomPanel from "./RoomPanel";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
 import { MODE_LABEL, STAGE_LABEL } from "@/lib/scoring";
@@ -111,6 +112,9 @@ export default function SetupScreen() {
         </p>
         {/* ลิงก์หลังบ้านถอดออกจากหน้าแรกแล้ว — เข้าที่ /admin ตรงๆ เท่านั้น */}
       </header>
+
+      {/* เล่นข้ามเครื่อง — วางไว้บนสุดเพราะต้องเปิดห้องก่อนเริ่มเกม */}
+      <RoomPanel defaultName={names[0] ?? ""} />
 
       {/* เลือกโหมด */}
       <section className="space-y-3">

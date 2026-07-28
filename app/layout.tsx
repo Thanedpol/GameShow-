@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import SafetyBanner from "@/components/SafetyBanner";
 import { GameProvider } from "@/lib/gameStore";
+import { RoomProvider } from "@/lib/roomClient";
 
 export const metadata: Metadata = {
   title: "ใบ้จริง...ใบ้หลอก — Playable Demo",
@@ -27,11 +28,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <SafetyBanner />
-        <GameProvider>
-          <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-5 sm:px-6">
-            {children}
-          </main>
-        </GameProvider>
+        <RoomProvider>
+          <GameProvider>
+            <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-5 sm:px-6">
+              {children}
+            </main>
+          </GameProvider>
+        </RoomProvider>
       </body>
     </html>
   );

@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ScoreBoard from "./ScoreBoard";
+import TeammateNotes from "./TeammateNotes";
 import TimerRing from "./TimerRing";
 import { useGame } from "@/lib/gameStore";
+import { useRoom } from "@/lib/roomClient";
 import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
 import {
   STAGE_LABEL,
@@ -43,6 +45,7 @@ interface Outcome {
 
 export default function QuestionScreen() {
   const { state, dispatch } = useGame();
+  const { isHost, syncLive } = useRoom();
   const question = state.questions[state.currentQuestionIndex];
   const activeIndex = activeParticipantIndex(
     state.currentQuestionIndex,
@@ -114,6 +117,34 @@ export default function QuestionScreen() {
     startTimer(stageSeconds * 1000);
     return () => stopTimer();
   }, [state.currentQuestionIndex, question?.format, stageSeconds, startTimer, stopTimer]);
+
+  // ── ส่งสถานะสดให้เพื่อนร่วมทีมที่ใช้เครื่องอื่น ──────────────────────────
+  // นาฬิกากับกล่องคำใบ้เป็น state ในหน้านี้ ไม่ได้อยู่ใน reducer จึงต้องส่งแยก
+  // ใช้ timer.deadlineAt ตรง ๆ เพราะเป็นเวลาปลายทางจริง ไม่เพี้ยนตามการหน่วง
+  // ของแท็บ และเปลี่ยนแค่ตอนขึ้นข้อใหม่ จึงไม่ยิงเครือข่ายทุก tick
+  useEffect(() => {
+    if (!isHost) return;
+    syncLive({
+      questionId: question?.id ?? null,
+      deadlineAt: timer.deadlineAt,
+      boxes: (boxes ?? []).map((b) => ({
+        id: b.id,
+        label: b.label,
+        text: openedIds.includes(b.id) ? b.text : null,
+      })),
+      activeParticipantId: active?.id ?? null,
+      step: phase,
+    });
+  }, [
+    isHost,
+    syncLive,
+    question?.id,
+    timer.deadlineAt,
+    boxes,
+    openedIds,
+    active?.id,
+    phase,
+  ]);
 
   // ── โหลดกล่องคำใบ้ล่วงหน้าตั้งแต่ข้อเริ่ม เพื่อให้กดเปิดได้ทันที ──────────
   useEffect(() => {
@@ -525,6 +556,11 @@ export default function QuestionScreen() {
             </p>
           ) : null}
         </section>
+      ) : null}
+
+      {/* ── ข้อเสนอจากเพื่อนร่วมทีมที่ใช้อีกเครื่อง ─────────────────────── */}
+      {phase === "answering" || phase === "performing" ? (
+        <TeammateNotes questionId={question.id} />
       ) : null}
 
       {/* ── บอทกำลังคิด ─────────────────────────────────────────────────── */}
