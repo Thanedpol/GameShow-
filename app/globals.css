@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    @apply bg-stage-bg text-slate-100 font-thai antialiased;
+  }
+
+  body {
+    background-image:
+      radial-gradient(60rem 40rem at 15% -10%, rgba(168, 85, 247, 0.18), transparent 60%),
+      radial-gradient(50rem 36rem at 90% 0%, rgba(34, 211, 238, 0.14), transparent 60%),
+      radial-gradient(48rem 40rem at 50% 110%, rgba(236, 72, 153, 0.12), transparent 60%);
+    background-attachment: fixed;
+    min-height: 100dvh;
+  }
+
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-stage-edge/80 bg-stage-panel/70 backdrop-blur-sm;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3
+           text-base font-semibold transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-40 active:scale-[0.98];
+  }
+
+  .btn-primary {
+    @apply btn bg-gradient-to-r from-fuchsia-600 to-violet-600 text-white
+           shadow-glow hover:from-fuchsia-500 hover:to-violet-500;
+  }
+
+  .btn-ghost {
+    @apply btn border border-stage-edge bg-white/5 text-slate-100 hover:bg-white/10;
+  }
+
+  .btn-cyan {
+    @apply btn bg-gradient-to-r from-cyan-500 to-sky-600 text-slate-950
+           shadow-glow-cyan hover:from-cyan-400 hover:to-sky-500;
+  }
+
+  .choice {
+    @apply w-full rounded-xl border border-stage-edge bg-white/[0.04] px-4 py-4
+           text-left text-base leading-relaxed transition-all duration-150
+           hover:border-fuchsia-400/70 hover:bg-white/[0.09]
+           disabled:cursor-not-allowed disabled:hover:border-stage-edge
+           disabled:hover:bg-white/[0.04];
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold;
+  }
+}
+
+/* ให้ตัวเลขนับถอยหลังไม่ขยับซ้ายขวาระหว่างนับ */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

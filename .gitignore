@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+build/
+
+.env
+.env.local
+.env*.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+.DS_Store
+*.pem
+next-env.d.ts
+tsconfig.tsbuildinfo
+.vercel
+
+# เครื่องมือประจำเครื่อง (ไม่ต้อง commit)
+.claude/settings.local.json
