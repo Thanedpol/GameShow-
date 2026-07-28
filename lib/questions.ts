@@ -124,6 +124,31 @@ export const QUESTION_BANK: Question[] = [
       "การจ่ายด้วยบัตรเครดิตมีสิทธิ์ขอ chargeback ซึ่งมีกรอบเวลาจำกัด ยิ่งแจ้งเร็วยิ่งได้เปรียบ",
   },
 
+  {
+    id: "w-life-02",
+    category: "ชีวิตจริง",
+    stage: "warmup",
+    difficulty: "กลาง",
+    format: "open",
+    pointValue: POINTS.warmup,
+    prompt:
+      "เพื่อนสนิทยืมเงินคุณ 5,000 บาท เลยกำหนดคืนมา 2 เดือนแล้วและเงียบหายไป คุณจะทักไปว่าอย่างไร เขียนข้อความที่จะส่งจริง",
+    rubric:
+      "ให้คะแนนสูงถ้า: (1) ทักตรงประเด็นเรื่องเงินโดยไม่อ้อมค้อมจนอีกฝ่ายตีความผิด " +
+      "(2) รักษาน้ำใจ ไม่ประจานหรือกดดันเกินจำเป็น " +
+      "(3) เสนอทางออกที่ทำได้จริง เช่น ขอกำหนดวันใหม่หรือแบ่งจ่าย " +
+      "(4) มีการระบุตัวเลขและวันที่ชัดเจน " +
+      "หักคะแนนถ้าเลี่ยงไม่พูดถึงเงินเลย ขู่ หรือใช้การประชด",
+    keyPoints: [
+      "พูดถึงยอดเงินและกำหนดเดิมอย่างชัดเจน",
+      "เปิดโอกาสให้อีกฝ่ายอธิบาย",
+      "เสนอทางออกที่ยืดหยุ่นได้",
+      "กำหนดวันใหม่ที่จับต้องได้",
+    ],
+    explanation:
+      "การทวงที่ได้ผลคือชัดเจนเรื่องตัวเลขและวัน แต่ยังเปิดทางให้อีกฝ่ายรักษาหน้า",
+  },
+
   // ══════════════ PUSH YOUR LUCK ══════════════
   {
     id: "p-scam-01",
@@ -277,6 +302,24 @@ export const QUESTION_BANK: Question[] = [
     explanation: "ทารกแรกเกิดมีราว 270 ชิ้น แล้วเชื่อมรวมกันเหลือ 206 ชิ้นเมื่อโตเต็มวัย",
   },
 
+  {
+    id: "p-work-02",
+    category: "ที่ทำงาน",
+    stage: "push",
+    difficulty: "กลาง",
+    format: "performance",
+    pointValue: POINTS.push,
+    prompt: "อธิบายเรื่องยาก ๆ ให้คนที่ไม่รู้เรื่องเลยเข้าใจใน 45 วินาที",
+    task:
+      "เลือกเรื่องที่คุณรู้ดีแต่คนทั่วไปไม่เข้าใจ (งานที่ทำ ศัพท์เฉพาะทาง " +
+      "หรือระบบอะไรก็ได้) แล้วอธิบายสด ๆ ภายใน 45 วินาที " +
+      "ให้คนที่ไม่มีพื้นฐานเลยฟังแล้วเห็นภาพ ห้ามใช้ศัพท์เทคนิคโดยไม่อธิบาย " +
+      "ต้องมีการเปรียบเทียบกับสิ่งที่คนทั่วไปคุ้นเคยอย่างน้อย 1 อย่าง",
+    rubric:
+      "ให้ดาวจาก: เริ่มจากภาพใหญ่ก่อนลงรายละเอียด, มีการเปรียบเทียบที่ทำให้เห็นภาพจริง, " +
+      "ไม่ทิ้งศัพท์เทคนิคไว้ลอย ๆ, คนฟังสรุปกลับได้ว่าเรื่องนี้เกี่ยวกับอะไร, คุมเวลาได้",
+  },
+
   // ══════════════ AI DUEL FINAL ══════════════
   {
     id: "f-ai-01",
@@ -314,6 +357,33 @@ export const QUESTION_BANK: Question[] = [
     ],
     explanation:
       "หัวใจของการจัดการวิกฤตคือความเร็วในการสื่อสาร ความตรงไปตรงมา และการให้จังหวะอัปเดตที่คาดเดาได้",
+  },
+  {
+    id: "f-scam-01",
+    category: "สแกม",
+    stage: "final",
+    difficulty: "ยาก",
+    format: "open",
+    pointValue: POINTS.final,
+    prompt:
+      "มีคนโทรมาอ้างเป็นเจ้าหน้าที่ธนาคาร รู้ชื่อเต็ม เลขบัญชี 4 ตัวท้าย และรายการที่คุณเพิ่งโอนจริงเมื่อเช้า แล้วบอกว่าบัญชีถูกใช้ฟอกเงิน ต้องโอนเงินไปบัญชีปลอดภัยเดี๋ยวนี้ คุณจะทำอะไรบ้าง และอธิบายว่าทำไมเขาถึงรู้ข้อมูลพวกนั้นได้",
+    rubric:
+      "ให้คะแนนสูงถ้า: (1) ยืนยันว่าจะไม่โอนเงินไม่ว่าเหตุผลจะฟังดูเร่งด่วนแค่ไหน " +
+      "และรู้ว่าไม่มีสิ่งที่เรียกว่า 'บัญชีปลอดภัย' " +
+      "(2) วางสายแล้วโทรกลับเองผ่านเบอร์หลังบัตรหรือแอปธนาคาร ไม่ใช่เบอร์ที่โทรเข้ามา " +
+      "(3) อธิบายได้ว่าการรู้ข้อมูลบางส่วนมาจากข้อมูลรั่วไหลหรือการรวบรวมจากหลายแหล่ง " +
+      "ไม่ได้แปลว่าเป็นเจ้าหน้าที่จริง " +
+      "(4) ระบุกลไกกดดันที่ถูกใช้ เช่น การสร้างความเร่งด่วนและการอ้างอำนาจ " +
+      "หักคะแนนถ้าแนะนำให้โอนก่อนแล้วค่อยตรวจสอบ หรือให้ข้อมูลเพิ่มทางโทรศัพท์",
+    keyPoints: [
+      "ไม่โอนเงินเด็ดขาด และไม่มี 'บัญชีปลอดภัย' จริง",
+      "วางสายแล้วติดต่อกลับผ่านช่องทางทางการที่หาเอง",
+      "ข้อมูลที่เขารู้มาจากการรั่วไหล ไม่ใช่หลักฐานว่าเป็นเจ้าหน้าที่",
+      "จับสังเกตกลไกเร่งด่วนและการอ้างอำนาจ",
+    ],
+    explanation:
+      "จุดตายของสแกมแบบนี้คือการทำให้เหยื่อเชื่อว่า 'เขารู้ขนาดนี้ต้องเป็นตัวจริง' " +
+      "ทั้งที่ข้อมูลบางส่วนหาได้จากข้อมูลรั่วไหล และธนาคารจริงไม่เคยขอให้โอนเงินออกจากบัญชีตัวเอง",
   },
   {
     id: "f-comm-01",
@@ -358,28 +428,35 @@ function pickWithVariety(pool: Question[], n: number): Question[] {
   return shuffle(picked.slice(0, n));
 }
 
-export interface DrawnQuestions {
-  main: Question[];
-  final: Question;
+export interface DrawOptions {
+  /** คลังคำถามที่จะใช้ — ถ้าไม่ส่งมาใช้คลังตั้งต้น */
+  bank?: Question[];
+  /** จำนวนข้อต่อช่วง */
+  counts?: Partial<Record<Stage, number>>;
+  /** คะแนนตั้งต้นต่อช่วง — จะเขียนทับ pointValue ของข้อนั้น */
+  points?: Partial<Record<Stage, number>>;
 }
 
-/** ชุดคำถามของ 1 เกม: warmup 4 + push 4 + final 1 พร้อมสลับลำดับตัวเลือก */
-export function drawQuestions(): DrawnQuestions {
-  const warmup = pickWithVariety(
-    QUESTION_BANK.filter((q) => q.stage === "warmup"),
-    4,
-  );
-  const push = pickWithVariety(
-    QUESTION_BANK.filter((q) => q.stage === "push"),
-    4,
-  );
-  const final = shuffle(QUESTION_BANK.filter((q) => q.stage === "final"))[0];
+/** ชุดคำถามของ 1 เกม เรียงตามช่วง พร้อมสลับลำดับตัวเลือก */
+export function drawQuestions(options: DrawOptions = {}): Question[] {
+  const bank = options.bank?.length ? options.bank : QUESTION_BANK;
+  const counts = { warmup: 4, push: 4, final: 1, ...options.counts };
 
-  const withShuffledChoices = (q: Question): Question =>
-    q.choices ? { ...q, choices: shuffle(q.choices) } : { ...q };
+  const withOverrides = (q: Question): Question => ({
+    ...q,
+    pointValue: options.points?.[q.stage] ?? q.pointValue,
+    choices: q.choices ? shuffle(q.choices) : undefined,
+  });
 
-  return {
-    main: [...warmup, ...push].map(withShuffledChoices),
-    final: withShuffledChoices(final),
-  };
+  const stages: Stage[] = ["warmup", "push", "final"];
+  const picked: Question[] = [];
+  for (const stage of stages) {
+    const pool = bank.filter((q) => q.stage === stage);
+    const n = Math.min(counts[stage] ?? 0, pool.length);
+    if (n <= 0) continue;
+    picked.push(...pickWithVariety(pool, n));
+  }
+
+  // ถ้าคลังที่ผู้ใช้แก้ไม่มีข้อของช่วงไหนเลย จะได้ชุดสั้นลง แต่เกมยังเล่นได้
+  return picked.map(withOverrides);
 }

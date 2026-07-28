@@ -27,9 +27,10 @@ export const MODE_LABEL: Record<MatchMode, string> = {
 /**
  * ตัวคูณคะแนนที่เหลือหลังเปิดกล่องคำใบ้
  * paidBoxes = จำนวนกล่องที่เปิดโดยไม่ได้ใช้โทเคน
+ * costRatio  = ค่าหักต่อกล่อง (ปรับได้จากหลังบ้าน)
  */
-export function hintMultiplier(paidBoxes: number): number {
-  return Math.max(0, 1 - BOX_COST_RATIO * paidBoxes);
+export function hintMultiplier(paidBoxes: number, costRatio = BOX_COST_RATIO): number {
+  return Math.max(0, 1 - costRatio * paidBoxes);
 }
 
 export interface ScoreInput {
@@ -39,6 +40,8 @@ export interface ScoreInput {
   /** กล่องที่เปิดและต้องจ่ายคะแนน (ไม่นับกล่องที่ใช้โทเคนแลก) */
   paidBoxes: number;
   timedOut: boolean;
+  /** ค่าหักต่อกล่อง (ปรับได้จากหลังบ้าน) */
+  costRatio?: number;
 }
 
 /** ไม่ตอบ/หมดเวลา = 0 คะแนนเสมอ และไม่มีคะแนนติดลบในเกมนี้ */
@@ -47,9 +50,10 @@ export function scoreForRound({
   quality,
   paidBoxes,
   timedOut,
+  costRatio,
 }: ScoreInput): number {
   if (timedOut || quality <= 0) return 0;
-  const raw = pointValue * hintMultiplier(paidBoxes) * (quality / 100);
+  const raw = pointValue * hintMultiplier(paidBoxes, costRatio) * (quality / 100);
   return Math.max(0, Math.round(raw));
 }
 

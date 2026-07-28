@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ScoreBoard from "./ScoreBoard";
@@ -6,8 +6,6 @@ import TimerRing from "./TimerRing";
 import { useGame } from "@/lib/gameStore";
 import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
 import {
-  BOX_COST_RATIO,
-  QUESTION_SECONDS,
   STAGE_LABEL,
   activeParticipantIndex,
   hintMultiplier,
@@ -89,6 +87,7 @@ export default function QuestionScreen() {
   const tokenSpent = useToken && openedIds.length > 0;
   const paidBoxes = Math.max(0, openedIds.length - (tokenSpent ? 1 : 0));
   const isBotTurn = active?.kind === "bot";
+  const cfg = state.settings;
 
   // ── รีเซ็ตต่อข้อ + เริ่มนาฬิกา 60 วิ (ไม่มีการหยุดพักระหว่างข้อ) ──────────
   useEffect(() => {
@@ -107,7 +106,7 @@ export default function QuestionScreen() {
     setBoxes(null);
     setRevealToken(null);
     setHintFailed(false);
-    startTimer(QUESTION_SECONDS * 1000);
+    startTimer(cfg.questionSeconds * 1000);
     return () => stopTimer();
   }, [state.currentQuestionIndex, question?.format, startTimer, stopTimer]);
 
@@ -123,7 +122,9 @@ export default function QuestionScreen() {
         const res = await fetch("/api/hint", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ questionId: question.id }),
+          // ส่งตัวข้อไปด้วย เผื่อเป็นคำถามที่แก้/เพิ่มจากหลังบ้าน
+          // ซึ่งเซิร์ฟเวอร์ไม่มีอยู่ในคลังตั้งต้น
+          body: JSON.stringify({ questionId: question.id, question }),
         });
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as HintApiResponse;
@@ -174,7 +175,7 @@ export default function QuestionScreen() {
         if (opts.timedOut || opts.quality <= 0) return 0;
         return Math.max(
           0,
-          Math.round(question.pointValue * hintMultiplier(paidBoxes) * (opts.quality / 100)),
+          Math.round(question.pointValue * hintMultiplier(paidBoxes, cfg.boxCostRatio) * (opts.quality / 100)),
         );
       })();
 
@@ -235,6 +236,7 @@ export default function QuestionScreen() {
       paidBoxes,
       tokenSpent,
       revealToken,
+      cfg.boxCostRatio,
       dispatch,
       loadReveal,
       startTimer,
@@ -272,7 +274,7 @@ export default function QuestionScreen() {
           const res = await fetch("/api/grade", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ questionId: question.id, answer }),
+            body: JSON.stringify({ questionId: question.id, question, answer }),
           });
           const data = (await res.json()) as GradeApiResponse;
           commit({
@@ -337,7 +339,7 @@ export default function QuestionScreen() {
     if (!isBotTurn || !question || (phase !== "answering" && phase !== "performing")) return;
     const plan = planBotTurn(question, "ปกติ");
     setBotTurn(plan);
-    const delay = Math.min(plan.thinkSeconds, QUESTION_SECONDS - 5) * 1000;
+    const delay = Math.min(plan.thinkSeconds, cfg.questionSeconds - 5) * 1000;
     const id = window.setTimeout(() => {
       if (resolvedRef.current) return;
       resolvedRef.current = true;
@@ -359,7 +361,7 @@ export default function QuestionScreen() {
 
   const totalQuestions = state.questions.length;
   const isLast = state.currentQuestionIndex + 1 >= totalQuestions;
-  const remainingPct = Math.round(hintMultiplier(paidBoxes) * 100);
+  const remainingPct = Math.round(hintMultiplier(paidBoxes, cfg.boxCostRatio) * 100);
   const formatLabel =
     question.format === "choice"
       ? "ปรนัย"
@@ -395,7 +397,7 @@ export default function QuestionScreen() {
         </div>
         <TimerRing
           remaining={timer.remaining}
-          total={QUESTION_SECONDS * 1000}
+          total={cfg.questionSeconds * 1000}
           label={phase === "steal" ? "แย่งตอบ" : "เวลาที่เหลือ"}
           paused={phase === "grading" || phase === "rating" || phase === "result"}
         />
@@ -415,7 +417,7 @@ export default function QuestionScreen() {
         <section className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-slate-200">
-              กล่องคำใบ้ · เปิดแล้ว {openedIds.length}/4
+              กล่องคำใบ้ · เปิดแล้ว {openedIds.length}/{cfg.boxCount}
             </h3>
             <span
               className={`chip ${
@@ -443,7 +445,7 @@ export default function QuestionScreen() {
           ) : null}
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {(boxes ?? Array.from({ length: 4 })).map((box, i) => {
+            {(boxes ?? Array.from({ length: cfg.boxCount })).map((box, i) => {
               const b = box as HintBox | undefined;
               const opened = b ? openedIds.includes(b.id) : false;
               if (opened && b) {
@@ -473,7 +475,7 @@ export default function QuestionScreen() {
                     {b ? `กล่อง ${b.label}` : "กำลังเตรียม"}
                   </span>
                   <span className="text-[10px] text-slate-400">
-                    {b ? `−${Math.round(BOX_COST_RATIO * 100)}%` : ""}
+                    {b ? `−${Math.round(cfg.boxCostRatio * 100)}%` : ""}
                   </span>
                 </button>
               );
@@ -761,7 +763,7 @@ export default function QuestionScreen() {
           {revealed ? (
             <div className="panel space-y-2 p-4">
               <h3 className="text-sm font-bold text-slate-200">
-                เฉลยกล่องคำใบ้ทั้ง 4 กล่อง
+                เฉลยกล่องคำใบ้ทั้งหมด
               </h3>
               {revealed.map((b) => {
                 const wasOpened = openedIds.includes(b.id);

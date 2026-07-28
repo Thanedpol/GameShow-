@@ -9,7 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { drawQuestions } from "./questions";
-import { MAX_TOKENS, scoreForRound, scoreForSteal, stageKey } from "./scoring";
+import { scoreForRound, scoreForSteal, stageKey } from "./scoring";
+import { DEFAULT_SETTINGS, loadQuestions, loadSettings } from "./settings";
 import type {
   GameState,
   HintUsage,
@@ -20,6 +21,7 @@ import type {
 
 const initialState: GameState = {
   mode: "solo",
+  settings: DEFAULT_SETTINGS,
   participants: [],
   questions: [],
   currentQuestionIndex: 0,
@@ -61,10 +63,11 @@ function adjustToken(
   participants: Participant[],
   id: string,
   delta: number,
+  maxTokens: number,
 ): Participant[] {
   return participants.map((p) =>
     p.id === id
-      ? { ...p, tokens: Math.max(0, Math.min(MAX_TOKENS, p.tokens + delta)) }
+      ? { ...p, tokens: Math.max(0, Math.min(maxTokens, p.tokens + delta)) }
       : p,
   );
 }
@@ -72,12 +75,19 @@ function adjustToken(
 function reducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case "START_GAME": {
-      const { main, final } = drawQuestions();
+      // อ่านค่าจากหลังบ้านตอนเริ่มเกม แล้วล็อกไว้ในสเตต
+      const settings = loadSettings();
+      const questions = drawQuestions({
+        bank: loadQuestions(),
+        counts: settings.counts,
+        points: settings.points,
+      });
       return {
         ...initialState,
         mode: action.mode,
+        settings,
         participants: action.participants,
-        questions: [...main, final],
+        questions,
         phase: "playing",
       };
     }
@@ -103,10 +113,12 @@ function reducer(state: GameState, action: GameAction): GameState {
         quality,
         paidBoxes,
         timedOut,
+        costRatio: state.settings.boxCostRatio,
       });
 
+      const maxTokens = state.settings.maxTokens;
       let participants = addScore(state.participants, participantId, points);
-      if (tokenSpent) participants = adjustToken(participants, participantId, -1);
+      if (tokenSpent) participants = adjustToken(participants, participantId, -1, maxTokens);
 
       // โทเคน: ตอบถูกในข้อแรกของช่วงนั้น โดยไม่เปิดกล่องเลย → +1
       const key = stageKey(participantId, question.stage);
@@ -114,7 +126,7 @@ function reducer(state: GameState, action: GameAction): GameState {
       if (!stageOpened[key]) {
         stageOpened = { ...stageOpened, [key]: true };
         if (!timedOut && quality >= 100 && boxesOpened === 0) {
-          participants = adjustToken(participants, participantId, +1);
+          participants = adjustToken(participants, participantId, +1, maxTokens);
         }
       }
 

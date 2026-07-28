@@ -161,6 +161,8 @@ export type Phase = "setup" | "playing" | "debrief";
 
 export interface GameState {
   mode: MatchMode;
+  /** ค่าที่ตั้งจากหลังบ้าน — ล็อกไว้ตอนเริ่มเกม เพื่อไม่ให้แก้กลางเกมแล้วคะแนนเพี้ยน */
+  settings: import("./settings").GameSettings;
   participants: Participant[];
   questions: Question[];
   currentQuestionIndex: number;

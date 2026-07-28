@@ -1,15 +1,11 @@
-"use client";
+﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
-import {
-  BOX_COST_RATIO,
-  HINT_BOX_COUNT,
-  MAX_TOKENS,
-  MODE_LABEL,
-  QUESTION_SECONDS,
-} from "@/lib/scoring";
+import { MODE_LABEL } from "@/lib/scoring";
+import { DEFAULT_SETTINGS, loadSettings, type GameSettings } from "@/lib/settings";
 import { MAX_PARTICIPANTS, TEAM_SIZE, type MatchMode, type Participant } from "@/lib/types";
 
 const MODE_INFO: Array<{ mode: MatchMode; icon: string; detail: string }> = [
@@ -32,6 +28,9 @@ export default function SetupScreen() {
     ["", ""],
     ["", ""],
   ]);
+  // อ่านกติกาที่ตั้งไว้จากหลังบ้าน มาแสดงให้ตรงกับที่จะเล่นจริง
+  const [cfg, setCfg] = useState<GameSettings>(DEFAULT_SETTINGS);
+  useEffect(() => setCfg(loadSettings()), []);
 
   const slots = mode === "solo" || mode === "bot" ? 1 : count;
 
@@ -108,9 +107,17 @@ export default function SetupScreen() {
           </span>
         </h1>
         <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-slate-300">
-          เปิดกล่องคำใบ้จาก AI ได้ 4 กล่อง — แต่ในนั้นมีทั้งของจริงและของปลอมปนกัน
-          หน้าที่ของคุณคือแยกให้ออกก่อนหมดเวลา
+          เปิดกล่องคำใบ้จาก AI ได้ {cfg.boxCount} กล่อง —
+          แต่ในนั้นมีทั้งของจริงและของปลอมปนกัน หน้าที่ของคุณคือแยกให้ออกก่อนหมดเวลา
         </p>
+        <Link
+          href="/admin"
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-stage-edge
+                     bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-slate-300
+                     transition hover:bg-white/10"
+        >
+          ⚙️ หลังบ้าน — แก้คำถาม กติกา และ API
+        </Link>
       </header>
 
       {/* เลือกโหมด */}
@@ -265,7 +272,7 @@ export default function SetupScreen() {
           <li className="flex gap-2">
             <span className="text-sky-300">▸</span>
             <span>
-              ข้อละ <b className="text-white">{QUESTION_SECONDS} วินาที</b> —
+              ข้อละ <b className="text-white">{cfg.questionSeconds} วินาที</b> —
               นับรวมเวลาเปิดกล่องคำใบ้ด้วย{" "}
               <b className="text-white">ไม่ตอบทันเวลา = 0 คะแนน</b>
             </span>
@@ -281,7 +288,7 @@ export default function SetupScreen() {
           <li className="flex gap-2">
             <span className="text-cyan-300">▸</span>
             <span>
-              ทุกข้อมีกล่องคำใบ้ <b className="text-white">{HINT_BOX_COUNT} กล่อง</b>{" "}
+              ทุกข้อมีกล่องคำใบ้ <b className="text-white">{cfg.boxCount} กล่อง</b>{" "}
               ในนั้นมีทั้งใบ้จริงและใบ้หลอก
               <b className="text-white"> อย่างน้อยอย่างละ 1 กล่องเสมอ</b>{" "}
               (ไม่มีทางเป็นจริงล้วนหรือหลอกล้วน)
@@ -291,15 +298,15 @@ export default function SetupScreen() {
             <span className="text-cyan-300">▸</span>
             <span>
               เปิด 1 กล่อง หักคะแนนข้อนั้น{" "}
-              <b className="text-white">{Math.round(BOX_COST_RATIO * 100)}%</b> —
-              เปิดครบ 4 กล่องคือไม่เหลือคะแนน
+              <b className="text-white">{Math.round(cfg.boxCostRatio * 100)}%</b> —
+              เปิดครบทุกกล่องคือไม่เหลือคะแนน
             </span>
           </li>
           <li className="flex gap-2">
             <span className="text-teal-300">▸</span>
             <span>
               ตอบถูก <b className="text-white">ข้อแรกของแต่ละช่วง</b> โดยไม่เปิดกล่องเลย →
-              ได้โทเคน +1 (สูงสุด {MAX_TOKENS}) ใช้เปิดกล่องฟรี 1 กล่อง
+              ได้โทเคน +1 (สูงสุด {cfg.maxTokens}) ใช้เปิดกล่องฟรี 1 กล่อง
             </span>
           </li>
           <li className="flex gap-2">

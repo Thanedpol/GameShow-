@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getQuestionById } from "@/lib/questions";
 import { gradeOpenAnswer } from "@/lib/hintEngine";
+import { sanitizeQuestion } from "@/lib/settings";
 import type { GradeApiRequest, GradeApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -27,7 +28,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "ต้องระบุ questionId" }, { status: 400 });
   }
 
-  const question = getQuestionById(questionId);
+  const question =
+    getQuestionById(questionId) ??
+    sanitizeQuestion((body as { question?: unknown }).question);
+
   if (!question) {
     return NextResponse.json({ error: "ไม่พบคำถามในคลัง" }, { status: 404 });
   }

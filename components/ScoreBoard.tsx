@@ -1,7 +1,6 @@
 "use client";
 
 import { useGame } from "@/lib/gameStore";
-import { MAX_TOKENS } from "@/lib/scoring";
 
 const ACCENTS = [
   "border-sky-400/60 bg-sky-500/15",
@@ -10,10 +9,10 @@ const ACCENTS = [
   "border-cyan-300/60 bg-cyan-400/15",
 ];
 
-function TokenPips({ count }: { count: number }) {
+function TokenPips({ count, max }: { count: number; max: number }) {
   return (
     <span className="inline-flex gap-1" aria-label={`โทเคนคำใบ้ ${count} ชิ้น`}>
-      {Array.from({ length: MAX_TOKENS }).map((_, i) => (
+      {Array.from({ length: max }).map((_, i) => (
         <span
           key={i}
           className={`h-2 w-2 rounded-full ${
@@ -58,7 +57,7 @@ export default function ScoreBoard({ activeId = null }: { activeId?: string | nu
               {p.score}
             </div>
             <div className="mt-1.5">
-              <TokenPips count={p.tokens} />
+              <TokenPips count={p.tokens} max={state.settings.maxTokens} />
             </div>
           </div>
         );

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getQuestionById } from "@/lib/questions";
 import { generateHintBoxes, sealReveal } from "@/lib/hintEngine";
+import { sanitizeQuestion } from "@/lib/settings";
 import type { HintApiRequest, HintApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -32,10 +33,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "ต้องระบุ questionId" }, { status: 400 });
   }
 
-  const question = getQuestionById(questionId);
+  // คลังตั้งต้นบนเซิร์ฟเวอร์มาก่อนเสมอ ถ้าไม่มีค่อยรับตัวข้อที่ client ส่งมา
+  // (กรณีคำถามที่เพิ่ม/แก้จากหลังบ้าน ซึ่งเก็บอยู่ใน localStorage ของเบราว์เซอร์)
+  const question =
+    getQuestionById(questionId) ??
+    sanitizeQuestion((body as { question?: unknown }).question);
+
   if (!question) {
     return NextResponse.json(
-      { error: `ไม่พบคำถามรหัส ${questionId} ในคลัง` },
+      { error: `ไม่พบคำถามรหัส ${questionId} และข้อมูลที่ส่งมาไม่ครบพอจะสร้างคำใบ้` },
       { status: 404 },
     );
   }
