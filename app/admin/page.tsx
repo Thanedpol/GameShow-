@@ -533,23 +533,14 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
   useEffect(() => setS(loadSettings()), []);
 
   const total = s.counts.warmup + s.counts.push + s.counts.final;
+  const totalSeconds = STAGES.reduce((sum, st) => sum + s.counts[st] * s.seconds[st], 0);
 
   return (
     <div className="space-y-4">
       <section className="panel space-y-3 p-4">
-        <h2 className="text-sm font-bold text-white">เวลาและกล่องคำใบ้</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="เวลาต่อข้อ (วินาที)">
-            <input
-              type="number"
-              min={10}
-              max={600}
-              value={s.questionSeconds}
-              onChange={(e) => setS({ ...s, questionSeconds: Number(e.target.value) })}
-              className="field"
-            />
-          </Field>
-          <Field label="จำนวนกล่องคำใบ้">
+        <h2 className="text-sm font-bold text-white">กล่องคำใบ้ (ใช้ร่วมทุกช่วง)</h2>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="จำนวนกล่องที่วาง">
             <input
               type="number"
               min={2}
@@ -559,7 +550,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               className="field"
             />
           </Field>
-          <Field label="หักต่อการเปิด 1 กล่อง (%)">
+          <Field label="หักต่อ 1 กล่อง (%)">
             <input
               type="number"
               min={0}
@@ -569,7 +560,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               className="field"
             />
           </Field>
-          <Field label="โทเคนสะสมสูงสุด">
+          <Field label="โทเคนสูงสุด">
             <input
               type="number"
               min={0}
@@ -580,52 +571,96 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
             />
           </Field>
         </div>
-        <p className="text-[11px] text-slate-400">
-          เปิดครบ {s.boxCount} กล่องจะเหลือ{" "}
-          <b className="text-slate-200">
-            {Math.max(0, Math.round((1 - s.boxCostRatio * s.boxCount) * 100))}%
-          </b>{" "}
-          ของคะแนนข้อนั้น
+        <p className="text-[11px] leading-relaxed text-slate-400">
+          กล่องที่วางไว้จะมีทั้งใบ้จริงและใบ้หลอกอย่างน้อยอย่างละ 1 เสมอ
+          ส่วนจะเปิดได้กี่กล่องกำหนดแยกตามช่วงด้านล่าง
         </p>
       </section>
 
       <section className="panel space-y-3 p-4">
-        <h2 className="text-sm font-bold text-white">คะแนนและจำนวนข้อต่อช่วง</h2>
-        {STAGES.map((stage) => (
-          <div key={stage} className="grid grid-cols-3 items-end gap-3">
-            <span className="pb-2 text-xs font-semibold text-slate-300">
-              {STAGE_TH[stage]}
-            </span>
-            <Field label="คะแนน/ข้อ">
-              <input
-                type="number"
-                min={0}
-                value={s.points[stage]}
-                onChange={(e) =>
-                  setS({ ...s, points: { ...s.points, [stage]: Number(e.target.value) } })
-                }
-                className="field"
-              />
-            </Field>
-            <Field label="ใช้กี่ข้อ">
-              <input
-                type="number"
-                min={0}
-                max={20}
-                value={s.counts[stage]}
-                onChange={(e) =>
-                  setS({ ...s, counts: { ...s.counts, [stage]: Number(e.target.value) } })
-                }
-                className="field"
-              />
-            </Field>
-          </div>
-        ))}
+        <h2 className="text-sm font-bold text-white">ตั้งค่าแยกตามช่วง</h2>
+        {STAGES.map((stage) => {
+          const remain = Math.max(
+            0,
+            Math.round((1 - s.boxCostRatio * s.maxOpenBoxes[stage]) * 100),
+          );
+          return (
+            <div key={stage} className="rounded-xl border border-stage-edge/70 p-3">
+              <p className="mb-2 text-xs font-bold text-sky-200">{STAGE_TH[stage]}</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <Field label="ใช้กี่ข้อ">
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={s.counts[stage]}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        counts: { ...s.counts, [stage]: Number(e.target.value) },
+                      })
+                    }
+                    className="field"
+                  />
+                </Field>
+                <Field label="วินาที/ข้อ">
+                  <input
+                    type="number"
+                    min={5}
+                    max={600}
+                    value={s.seconds[stage]}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        seconds: { ...s.seconds, [stage]: Number(e.target.value) },
+                      })
+                    }
+                    className="field"
+                  />
+                </Field>
+                <Field label="เปิดกล่องได้">
+                  <input
+                    type="number"
+                    min={0}
+                    max={s.boxCount}
+                    value={s.maxOpenBoxes[stage]}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        maxOpenBoxes: {
+                          ...s.maxOpenBoxes,
+                          [stage]: Number(e.target.value),
+                        },
+                      })
+                    }
+                    className="field"
+                  />
+                </Field>
+                <Field label="คะแนน/ข้อ">
+                  <input
+                    type="number"
+                    min={0}
+                    value={s.points[stage]}
+                    onChange={(e) =>
+                      setS({
+                        ...s,
+                        points: { ...s.points, [stage]: Number(e.target.value) },
+                      })
+                    }
+                    className="field"
+                  />
+                </Field>
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-400">
+                เปิดครบโควตา {s.maxOpenBoxes[stage]} กล่อง จะเหลือ{" "}
+                <b className="text-slate-200">{remain}%</b> ของคะแนนข้อนั้น
+              </p>
+            </div>
+          );
+        })}
         <p className="text-[11px] text-slate-400">
           รวม <b className="text-slate-200">{total} ข้อ</b> ต่อ 1 เกม · เวลาเล่นประมาณ{" "}
-          <b className="text-slate-200">
-            {Math.round((total * s.questionSeconds) / 60)} นาที
-          </b>
+          <b className="text-slate-200">{Math.round(totalSeconds / 60)} นาที</b>
         </p>
       </section>
 

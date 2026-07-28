@@ -9,14 +9,16 @@ import type { Question, Stage } from "./types";
  * ถ้าจะย้ายไปเครื่องอื่นให้ใช้ปุ่ม Export/Import JSON ในหน้าหลังบ้าน
  */
 export interface GameSettings {
-  /** เวลาต่อข้อ (วินาที) — นับรวมเวลาเปิดกล่องคำใบ้ */
-  questionSeconds: number;
-  /** จำนวนกล่องคำใบ้ต่อข้อ */
+  /** จำนวนกล่องคำใบ้ที่วางให้เห็นต่อข้อ */
   boxCount: number;
   /** สัดส่วนคะแนนที่ถูกหักต่อการเปิด 1 กล่อง (0.25 = 25%) */
   boxCostRatio: number;
   /** โทเคนสะสมสูงสุด */
   maxTokens: number;
+  /** เวลาต่อข้อ แยกตามช่วง (วินาที) — นับรวมเวลาเปิดกล่องคำใบ้ */
+  seconds: Record<Stage, number>;
+  /** เปิดกล่องคำใบ้ได้สูงสุดกี่กล่อง แยกตามช่วง */
+  maxOpenBoxes: Record<Stage, number>;
   /** คะแนนตั้งต้นของแต่ละช่วง */
   points: Record<Stage, number>;
   /** จำนวนข้อที่หยิบมาใช้ต่อ 1 เกม */
@@ -24,12 +26,13 @@ export interface GameSettings {
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
-  questionSeconds: 60,
   boxCount: 4,
   boxCostRatio: 0.25,
   maxTokens: 3,
+  seconds: { warmup: 60, push: 30, final: 20 },
+  maxOpenBoxes: { warmup: 1, push: 1, final: 2 },
   points: { warmup: 100, push: 200, final: 300 },
-  counts: { warmup: 4, push: 4, final: 1 },
+  counts: { warmup: 7, push: 9, final: 4 },
 };
 
 const SETTINGS_KEY = "baijing.settings.v1";
@@ -44,23 +47,32 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 /** ตรวจค่าที่โหลดมาให้อยู่ในช่วงที่เกมยังเล่นได้ กันค่าพังจาก localStorage ที่ถูกแก้มือ */
+const STAGES: Stage[] = ["warmup", "push", "final"];
+
+/** อ่านค่ารายช่วงจากของที่เซฟไว้ พร้อม clamp ให้อยู่ในช่วงที่เกมยังเล่นได้ */
+function stageRecord(
+  raw: Partial<Record<Stage, number>> | undefined,
+  fallback: Record<Stage, number>,
+  min: number,
+  max: number,
+): Record<Stage, number> {
+  const out = {} as Record<Stage, number>;
+  for (const s of STAGES) out[s] = clampNumber(raw?.[s], min, max, fallback[s]);
+  return out;
+}
+
 export function normalizeSettings(raw: Partial<GameSettings> | null): GameSettings {
   if (!raw) return { ...DEFAULT_SETTINGS };
+  const boxCount = clampNumber(raw.boxCount, 2, 6, DEFAULT_SETTINGS.boxCount);
   return {
-    questionSeconds: clampNumber(raw.questionSeconds, 10, 600, DEFAULT_SETTINGS.questionSeconds),
-    boxCount: clampNumber(raw.boxCount, 2, 6, DEFAULT_SETTINGS.boxCount),
+    boxCount,
     boxCostRatio: clampNumber(raw.boxCostRatio, 0, 1, DEFAULT_SETTINGS.boxCostRatio),
     maxTokens: clampNumber(raw.maxTokens, 0, 9, DEFAULT_SETTINGS.maxTokens),
-    points: {
-      warmup: clampNumber(raw.points?.warmup, 0, 100000, DEFAULT_SETTINGS.points.warmup),
-      push: clampNumber(raw.points?.push, 0, 100000, DEFAULT_SETTINGS.points.push),
-      final: clampNumber(raw.points?.final, 0, 100000, DEFAULT_SETTINGS.points.final),
-    },
-    counts: {
-      warmup: clampNumber(raw.counts?.warmup, 0, 20, DEFAULT_SETTINGS.counts.warmup),
-      push: clampNumber(raw.counts?.push, 0, 20, DEFAULT_SETTINGS.counts.push),
-      final: clampNumber(raw.counts?.final, 0, 5, DEFAULT_SETTINGS.counts.final),
-    },
+    seconds: stageRecord(raw.seconds, DEFAULT_SETTINGS.seconds, 5, 600),
+    // เปิดได้ไม่เกินจำนวนกล่องที่วางไว้จริง
+    maxOpenBoxes: stageRecord(raw.maxOpenBoxes, DEFAULT_SETTINGS.maxOpenBoxes, 0, boxCount),
+    points: stageRecord(raw.points, DEFAULT_SETTINGS.points, 0, 100000),
+    counts: stageRecord(raw.counts, DEFAULT_SETTINGS.counts, 0, 30),
   };
 }
 

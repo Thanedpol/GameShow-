@@ -70,7 +70,7 @@ app/
 components/
   SetupScreen · QuestionScreen · DebriefScreen · ScoreBoard · TimerRing · SafetyBanner
 lib/
-  types · questions (คลังตั้งต้น 19 ข้อ พร้อมคำใบ้เขียนไว้ในตัวข้อ) · scoring (สูตรคะแนน)
+  types · questions (คลังตั้งต้น 20 ข้อ พร้อมคำใบ้เขียนไว้ในตัวข้อ) · scoring (สูตรคะแนน)
   settings (ค่าจากหลังบ้าน + sanitizer) · gameStore (reducer)
   hintEngine (Claude + เข้ารหัส label) · bot · useCountdown
 ```
@@ -128,6 +128,11 @@ localStorage ของเบราว์เซอร์และเซิร์�
 | --- | --- | --- |
 | คำถาม | `localStorage` คีย์ `baijing.questions.v1` | ย้ายเครื่องด้วย Export/Import JSON |
 | กติกา | `localStorage` คีย์ `baijing.settings.v1` | อ่านตอนกด "เริ่มเกม" แล้วล็อกไว้ในสเตต |
+
+`GameSettings` แยกค่ารายช่วง (`Record<Stage, number>`) สามตัว — `seconds`,
+`maxOpenBoxes`, `points`, `counts` — ส่วน `boxCount` / `boxCostRatio` / `maxTokens`
+ใช้ร่วมกันทุกช่วง ค่าตั้งต้นคือ warmup 7 ข้อ/60 วิ/1 กล่อง · push 9 ข้อ/30 วิ/1 กล่อง ·
+final 4 ข้อ/20 วิ/2 กล่อง `normalizeSettings()` clamp `maxOpenBoxes` ไม่ให้เกิน `boxCount`
 | API | `.env.local` (dev เท่านั้น) | ไม่เคยส่งคีย์เต็มกลับไปฝั่ง client |
 
 **ข้อจำกัดที่ตั้งใจของแท็บ API**

@@ -1,15 +1,13 @@
 import type { MatchMode, Participant, Stage } from "./types";
 
-/** เวลาต่อ 1 ข้อ — รวมทุกอย่าง ทั้งเปิดกล่องคำใบ้และตอบ ห้ามเกินนี้ */
-export const QUESTION_SECONDS = 60;
-
-/** จำนวนกล่องคำใบ้ต่อข้อ */
+/**
+ * ค่าตั้งต้นของกลไกคำใบ้
+ * เวลาต่อข้อและโควตาการเปิดกล่องแยกตามช่วง — ดู DEFAULT_SETTINGS ใน lib/settings.ts
+ */
 export const HINT_BOX_COUNT = 4;
 
-/** เปิด 1 กล่อง หักคะแนนข้อนั้น 25% (เปิดครบ 4 = ไม่เหลือคะแนน) */
+/** เปิด 1 กล่อง หักคะแนนข้อนั้น 25% */
 export const BOX_COST_RATIO = 0.25;
-
-export const MAX_TOKENS = 3;
 
 export const STAGE_LABEL: Record<Stage, string> = {
   warmup: "Warm-Up",

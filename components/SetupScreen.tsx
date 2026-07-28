@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
-import { MODE_LABEL } from "@/lib/scoring";
+import { MODE_LABEL, STAGE_LABEL } from "@/lib/scoring";
 import { DEFAULT_SETTINGS, loadSettings, type GameSettings } from "@/lib/settings";
 import { MAX_PARTICIPANTS, TEAM_SIZE, type MatchMode, type Participant } from "@/lib/types";
 
@@ -272,10 +272,36 @@ export default function SetupScreen() {
           <li className="flex gap-2">
             <span className="text-sky-300">▸</span>
             <span>
-              ข้อละ <b className="text-white">{cfg.questionSeconds} วินาที</b> —
-              นับรวมเวลาเปิดกล่องคำใบ้ด้วย{" "}
+              แต่ละช่วงมีเวลาและโควตากล่องคำใบ้ไม่เท่ากัน นาฬิกา{" "}
+              <b className="text-white">ไม่หยุดพัก</b> และ{" "}
               <b className="text-white">ไม่ตอบทันเวลา = 0 คะแนน</b>
             </span>
+          </li>
+          <li>
+            <div className="ml-5 overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="text-slate-400">
+                  <tr>
+                    <th className="pb-1 pr-3 font-medium">ช่วง</th>
+                    <th className="pb-1 pr-3 font-medium">ข้อ</th>
+                    <th className="pb-1 pr-3 font-medium">เวลา</th>
+                    <th className="pb-1 pr-3 font-medium">เปิดกล่อง</th>
+                    <th className="pb-1 font-medium">คะแนน</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-200">
+                  {(["warmup", "push", "final"] as const).map((st) => (
+                    <tr key={st} className="border-t border-white/5">
+                      <td className="py-1 pr-3">{STAGE_LABEL[st]}</td>
+                      <td className="tabular py-1 pr-3">{cfg.counts[st]}</td>
+                      <td className="tabular py-1 pr-3">{cfg.seconds[st]} วิ</td>
+                      <td className="tabular py-1 pr-3">{cfg.maxOpenBoxes[st]} กล่อง</td>
+                      <td className="tabular py-1">{cfg.points[st]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </li>
           <li className="flex gap-2">
             <span className="text-sky-300">▸</span>
@@ -288,10 +314,10 @@ export default function SetupScreen() {
           <li className="flex gap-2">
             <span className="text-cyan-300">▸</span>
             <span>
-              ทุกข้อมีกล่องคำใบ้ <b className="text-white">{cfg.boxCount} กล่อง</b>{" "}
+              ทุกข้อวางกล่องคำใบ้ไว้ <b className="text-white">{cfg.boxCount} กล่อง</b>{" "}
               ในนั้นมีทั้งใบ้จริงและใบ้หลอก
               <b className="text-white"> อย่างน้อยอย่างละ 1 กล่องเสมอ</b>{" "}
-              (ไม่มีทางเป็นจริงล้วนหรือหลอกล้วน)
+              แต่<b className="text-white">เปิดได้ตามโควตาของช่วงนั้น</b>เท่านั้น
             </span>
           </li>
           <li className="flex gap-2">
@@ -299,7 +325,7 @@ export default function SetupScreen() {
             <span>
               เปิด 1 กล่อง หักคะแนนข้อนั้น{" "}
               <b className="text-white">{Math.round(cfg.boxCostRatio * 100)}%</b> —
-              เปิดครบทุกกล่องคือไม่เหลือคะแนน
+              ไม่เปิดเลยได้เต็ม 100%
             </span>
           </li>
           <li className="flex gap-2">

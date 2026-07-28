@@ -88,6 +88,10 @@ export default function QuestionScreen() {
   const paidBoxes = Math.max(0, openedIds.length - (tokenSpent ? 1 : 0));
   const isBotTurn = active?.kind === "bot";
   const cfg = state.settings;
+  // เวลาและจำนวนกล่องที่เปิดได้ ต่างกันในแต่ละช่วง
+  const stageSeconds = question ? cfg.seconds[question.stage] : 60;
+  const maxOpen = question ? cfg.maxOpenBoxes[question.stage] : 1;
+  const openLimitReached = openedIds.length >= maxOpen;
 
   // ── รีเซ็ตต่อข้อ + เริ่มนาฬิกา 60 วิ (ไม่มีการหยุดพักระหว่างข้อ) ──────────
   useEffect(() => {
@@ -106,9 +110,9 @@ export default function QuestionScreen() {
     setBoxes(null);
     setRevealToken(null);
     setHintFailed(false);
-    startTimer(cfg.questionSeconds * 1000);
+    startTimer(stageSeconds * 1000);
     return () => stopTimer();
-  }, [state.currentQuestionIndex, question?.format, startTimer, stopTimer]);
+  }, [state.currentQuestionIndex, question?.format, stageSeconds, startTimer, stopTimer]);
 
   // ── โหลดกล่องคำใบ้ล่วงหน้าตั้งแต่ข้อเริ่ม เพื่อให้กดเปิดได้ทันที ──────────
   useEffect(() => {
@@ -167,15 +171,30 @@ export default function QuestionScreen() {
       strengths?: string[];
       improvements?: string[];
       remark?: string;
+      /**
+       * เทิร์นบอทเปิดกล่องแล้ว commit ในจังหวะเดียวกัน state จึงยังไม่อัปเดต
+       * ต้องส่งกล่องที่เปิดเข้ามาตรง ๆ ไม่งั้นบอทจะได้คำใบ้ฟรีโดยไม่ถูกหักคะแนน
+       */
+      boxesOverride?: HintBox[];
     }) => {
       if (!question || !active) return;
       stopTimer();
+
+      const usedBoxes = opts.boxesOverride ?? openedBoxes;
+      const usedCount = usedBoxes.length;
+      const usedPaid = opts.boxesOverride
+        ? usedCount
+        : paidBoxes;
 
       const points = (() => {
         if (opts.timedOut || opts.quality <= 0) return 0;
         return Math.max(
           0,
-          Math.round(question.pointValue * hintMultiplier(paidBoxes, cfg.boxCostRatio) * (opts.quality / 100)),
+          Math.round(
+            question.pointValue *
+              hintMultiplier(usedPaid, cfg.boxCostRatio) *
+              (opts.quality / 100),
+          ),
         );
       })();
 
@@ -185,13 +204,13 @@ export default function QuestionScreen() {
           participantId: active.id,
           answer: opts.answer,
           quality: opts.quality,
-          boxesOpened: openedIds.length,
-          tokenSpent,
+          boxesOpened: usedCount,
+          tokenSpent: opts.boxesOverride ? false : tokenSpent,
           timedOut: opts.timedOut,
           feedback: opts.feedback,
           openedBoxes:
-            revealToken && openedBoxes.length > 0
-              ? openedBoxes.map((b) => ({
+            revealToken && usedBoxes.length > 0
+              ? usedBoxes.map((b) => ({
                   boxId: b.id,
                   boxLabel: b.label,
                   text: b.text,
@@ -339,18 +358,19 @@ export default function QuestionScreen() {
     if (!isBotTurn || !question || (phase !== "answering" && phase !== "performing")) return;
     const plan = planBotTurn(question, "ปกติ");
     setBotTurn(plan);
-    const delay = Math.min(plan.thinkSeconds, cfg.questionSeconds - 5) * 1000;
+    const delay = Math.min(plan.thinkSeconds, Math.max(3, stageSeconds - 4)) * 1000;
     const id = window.setTimeout(() => {
       if (resolvedRef.current) return;
       resolvedRef.current = true;
-      if (plan.boxesOpened > 0 && boxes) {
-        setOpenedIds(boxes.slice(0, plan.boxesOpened).map((b) => b.id));
-      }
+      // บอทก็ติดโควตาการเปิดกล่องของช่วงนั้นเหมือนคนจริง
+      const botBoxes = boxes ? boxes.slice(0, Math.min(plan.boxesOpened, maxOpen)) : [];
+      if (botBoxes.length > 0) setOpenedIds(botBoxes.map((b) => b.id));
       commit({
         answer: plan.choice ?? "(บอทตอบ)",
         quality: plan.quality,
         timedOut: false,
-        remark: botRemark(plan, "ปกติ"),
+        remark: botRemark({ ...plan, boxesOpened: botBoxes.length }, "ปกติ"),
+        boxesOverride: botBoxes,
       });
     }, delay);
     return () => window.clearTimeout(id);
@@ -397,7 +417,7 @@ export default function QuestionScreen() {
         </div>
         <TimerRing
           remaining={timer.remaining}
-          total={cfg.questionSeconds * 1000}
+          total={stageSeconds * 1000}
           label={phase === "steal" ? "แย่งตอบ" : "เวลาที่เหลือ"}
           paused={phase === "grading" || phase === "rating" || phase === "result"}
         />
@@ -417,7 +437,10 @@ export default function QuestionScreen() {
         <section className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-slate-200">
-              กล่องคำใบ้ · เปิดแล้ว {openedIds.length}/{cfg.boxCount}
+              กล่องคำใบ้ {cfg.boxCount} กล่อง ·{" "}
+              <span className={openLimitReached ? "text-cyan-200" : ""}>
+                ช่วงนี้เปิดได้ {maxOpen} กล่อง (เปิดแล้ว {openedIds.length})
+              </span>
             </h3>
             <span
               className={`chip ${
@@ -465,17 +488,17 @@ export default function QuestionScreen() {
                 <button
                   key={b?.id ?? i}
                   onClick={() => b && openBox(b.id)}
-                  disabled={!b}
+                  disabled={!b || openLimitReached}
                   className="hint-box"
                 >
                   <span className="text-2xl" aria-hidden="true">
-                    {b ? "🎁" : "⏳"}
+                    {!b ? "⏳" : openLimitReached ? "🔒" : "🎁"}
                   </span>
                   <span className="text-xs font-bold text-sky-100">
                     {b ? `กล่อง ${b.label}` : "กำลังเตรียม"}
                   </span>
                   <span className="text-[10px] text-slate-400">
-                    {b ? `−${Math.round(cfg.boxCostRatio * 100)}%` : ""}
+                    {!b ? "" : openLimitReached ? "ครบโควตาแล้ว" : `−${Math.round(cfg.boxCostRatio * 100)}%`}
                   </span>
                 </button>
               );
