@@ -4,11 +4,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   LLM_PROVIDERS,
   PROVIDER_LABEL,
-  anthropicKey,
   envChoice,
   isProviderReady,
   ollamaBaseUrl,
-  openRouterKey,
+  providerEnvKey,
+  providerKey,
   resolveLlm,
   sanitizeModel,
   testLlm,
@@ -71,37 +71,28 @@ export interface AdminConfigResponse {
   locked?: boolean;
 }
 
+const PROVIDER_NOTE: Record<LlmProvider, string> = {
+  anthropic: "คุณภาพคำใบ้ดีที่สุด เพราะ prompt ทั้งหมดเขียนจูนมากับ Claude",
+  openai: "GPT ของ OpenAI — คีย์จาก platform.openai.com",
+  gemini: "Gemini ของ Google — คีย์จาก aistudio.google.com มีโควตาฟรีให้ลอง",
+  openrouter: "คีย์เดียวเรียกได้หลายร้อยโมเดล จ่ายตามใช้จริง",
+  ollama:
+    "ฟรีและไม่ต้องมีคีย์ แต่เซิร์ฟเวอร์ต้องต่อถึงเครื่องที่รัน Ollama ได้ — " +
+    "บน Vercel จะเรียก localhost ของคุณไม่ได้ ใช้ได้เฉพาะตอนรันในเครื่อง",
+};
+
 function buildStatus(): ProviderStatus[] {
-  const anthropic = anthropicKey();
-  const openrouter = openRouterKey();
-  return [
-    {
-      provider: "anthropic",
-      label: PROVIDER_LABEL.anthropic,
-      ready: Boolean(anthropic),
-      envKey: "ANTHROPIC_API_KEY",
-      maskedKey: anthropic ? maskKey(anthropic) : null,
-      note: "คุณภาพคำใบ้ดีที่สุด เพราะ prompt ทั้งหมดเขียนจูนมากับ Claude",
-    },
-    {
-      provider: "openrouter",
-      label: PROVIDER_LABEL.openrouter,
-      ready: Boolean(openrouter),
-      envKey: "OPENROUTER_API_KEY",
-      maskedKey: openrouter ? maskKey(openrouter) : null,
-      note: "คีย์เดียวเรียกได้หลายร้อยโมเดล จ่ายตามใช้จริง",
-    },
-    {
-      provider: "ollama",
-      label: PROVIDER_LABEL.ollama,
-      ready: true,
-      envKey: null,
-      maskedKey: null,
-      note:
-        "ฟรีและไม่ต้องมีคีย์ แต่เซิร์ฟเวอร์ต้องต่อถึงเครื่องที่รัน Ollama ได้ — " +
-        "บน Vercel จะเรียก localhost ของคุณไม่ได้ ใช้ได้เฉพาะตอนรันในเครื่อง",
-    },
-  ];
+  return LLM_PROVIDERS.map((provider) => {
+    const key = providerKey(provider);
+    return {
+      provider,
+      label: PROVIDER_LABEL[provider],
+      ready: isProviderReady(provider),
+      envKey: providerEnvKey(provider),
+      maskedKey: key ? maskKey(key) : null,
+      note: PROVIDER_NOTE[provider],
+    };
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -145,10 +136,18 @@ function upsertEnv(content: string, key: string, value: string): string {
 interface SaveBody {
   provider?: string;
   model?: string;
-  anthropicKey?: string;
-  openRouterKey?: string;
+  /** คีย์รายเจ้า — ชื่อฟิลด์คือชื่อ provider เช่น { openai: "sk-..." } */
+  keys?: Partial<Record<LlmProvider, string>>;
   ollamaBaseUrl?: string;
 }
+
+/** ตรวจรูปแบบคีย์คร่าว ๆ เพื่อกันพิมพ์ผิด ไม่ได้ยืนยันว่าคีย์ใช้ได้จริง */
+const KEY_FORMAT: Partial<Record<LlmProvider, { pattern: RegExp; hint: string }>> = {
+  anthropic: { pattern: /^sk-ant-[\w-]{10,}$/, hint: "ควรขึ้นต้นด้วย sk-ant-" },
+  openai: { pattern: /^sk-[\w-]{20,}$/, hint: "ควรขึ้นต้นด้วย sk-" },
+  gemini: { pattern: /^AIza[\w-]{20,}$/, hint: "ควรขึ้นต้นด้วย AIza" },
+  openrouter: { pattern: /^sk-or-[\w-]{10,}$/, hint: "ควรขึ้นต้นด้วย sk-or-" },
+};
 
 export async function POST(request: NextRequest) {
   if (!authorized(request)) {
@@ -172,24 +171,37 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "รูปแบบ JSON ไม่ถูกต้อง" }, { status: 400 });
   }
 
-  const claudeKey = body.anthropicKey?.trim();
-  const routerKey = body.openRouterKey?.trim();
   const ollamaUrl = body.ollamaBaseUrl?.trim();
   const provider = body.provider?.trim();
   const model = body.model?.trim();
 
-  if (claudeKey && !/^sk-ant-[\w-]{10,}$/.test(claudeKey)) {
-    return NextResponse.json(
-      { error: "คีย์ Anthropic ไม่ถูกรูปแบบ — ควรขึ้นต้นด้วย sk-ant-" },
-      { status: 400 },
-    );
+  // เก็บเป็นคู่ [ชื่อ env, ค่า] ไว้เขียนลงไฟล์ทีเดียวตอนท้าย
+  const keyLines: Array<[string, string]> = [];
+  for (const [name, raw] of Object.entries(body.keys ?? {})) {
+    if (!(LLM_PROVIDERS as string[]).includes(name)) {
+      return NextResponse.json({ error: `ไม่รู้จักผู้ให้บริการ ${name}` }, { status: 400 });
+    }
+    const value = raw?.trim();
+    if (!value) continue;
+
+    const target = name as LlmProvider;
+    const envKey = providerEnvKey(target);
+    if (!envKey) {
+      return NextResponse.json(
+        { error: `${PROVIDER_LABEL[target]} ไม่ต้องใช้คีย์` },
+        { status: 400 },
+      );
+    }
+    const format = KEY_FORMAT[target];
+    if (format && !format.pattern.test(value)) {
+      return NextResponse.json(
+        { error: `คีย์ ${PROVIDER_LABEL[target]} ไม่ถูกรูปแบบ — ${format.hint}` },
+        { status: 400 },
+      );
+    }
+    keyLines.push([envKey, value]);
   }
-  if (routerKey && !/^sk-or-[\w-]{10,}$/.test(routerKey)) {
-    return NextResponse.json(
-      { error: "คีย์ OpenRouter ไม่ถูกรูปแบบ — ควรขึ้นต้นด้วย sk-or-" },
-      { status: 400 },
-    );
-  }
+
   if (ollamaUrl && !/^https?:\/\/[\w.-]+(:\d+)?\/?$/.test(ollamaUrl)) {
     return NextResponse.json(
       { error: "URL ของ Ollama ไม่ถูกรูปแบบ — ตัวอย่าง http://127.0.0.1:11434" },
@@ -211,8 +223,7 @@ export async function POST(request: NextRequest) {
     } catch {
       content = "";
     }
-    if (claudeKey) content = upsertEnv(content, "ANTHROPIC_API_KEY", claudeKey);
-    if (routerKey) content = upsertEnv(content, "OPENROUTER_API_KEY", routerKey);
+    for (const [envKey, value] of keyLines) content = upsertEnv(content, envKey, value);
     if (ollamaUrl) content = upsertEnv(content, "OLLAMA_BASE_URL", ollamaUrl);
     if (provider) content = upsertEnv(content, "LLM_PROVIDER", provider);
     if (model) content = upsertEnv(content, "HINT_MODEL", model);
@@ -248,11 +259,9 @@ export async function PUT(request: NextRequest) {
 
   const choice = resolveLlm(requested);
   if (!isProviderReady(choice.provider)) {
-    const envKey =
-      choice.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENROUTER_API_KEY";
     return NextResponse.json({
       ok: false,
-      message: `ยังไม่ได้ตั้ง ${envKey} — เกมจะทำงานในโหมดสำรอง`,
+      message: `ยังไม่ได้ตั้ง ${providerEnvKey(choice.provider)} — เกมจะทำงานในโหมดสำรอง`,
     });
   }
 

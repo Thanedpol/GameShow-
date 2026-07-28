@@ -707,9 +707,28 @@ const PROVIDER_CHOICES: Array<{
 }> = [
   { value: "auto", label: "ตามค่าเซิร์ฟเวอร์", hint: "ใช้ LLM_PROVIDER ที่ตั้งไว้ใน env" },
   { value: "anthropic", label: "Anthropic", hint: "Claude โดยตรง — คุณภาพคำใบ้ดีที่สุด" },
+  { value: "openai", label: "OpenAI", hint: "GPT จาก platform.openai.com" },
+  { value: "gemini", label: "Google Gemini", hint: "จาก aistudio.google.com มีโควตาฟรี" },
   { value: "openrouter", label: "OpenRouter", hint: "คีย์เดียว เลือกได้หลายร้อยโมเดล" },
   { value: "ollama", label: "Ollama", hint: "รันในเครื่องตัวเอง ฟรี ไม่ต้องมีคีย์" },
 ];
+
+/** ตัวอย่างชื่อโมเดลของแต่ละเจ้า ใช้เป็น placeholder ตอนพิมพ์เอง */
+const MODEL_PLACEHOLDER: Record<string, string> = {
+  anthropic: "claude-opus-5",
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.0-flash",
+  openrouter: "anthropic/claude-sonnet-4.5",
+  ollama: "llama3.1",
+};
+
+/** รูปแบบคีย์ของแต่ละเจ้า ช่วยให้เห็นว่ากำลังจะวางคีย์ผิดเจ้าหรือเปล่า */
+const KEY_PLACEHOLDER: Record<string, string> = {
+  anthropic: "sk-ant-...",
+  openai: "sk-...",
+  gemini: "AIza...",
+  openrouter: "sk-or-v1-...",
+};
 
 function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [cfg, setCfg] = useState<AdminConfigResponse | null>(null);
@@ -717,8 +736,8 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [llm, setLlm] = useState<LlmSettings>(DEFAULT_LLM_SETTINGS);
   const [models, setModels] = useState<AdminModelsResponse["models"]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [openRouterKey, setOpenRouterKey] = useState("");
+  // คีย์ที่พิมพ์ค้างไว้ ยังไม่บันทึก — key คือชื่อ provider
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(
@@ -796,19 +815,23 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   }
 
   async function handleSaveKeys() {
+    const keys = Object.fromEntries(
+      Object.entries(keyDrafts)
+        .map(([name, value]) => [name, value.trim()])
+        .filter(([, value]) => value.length > 0),
+    );
     const res = await fetch("/api/admin/config", {
       method: "POST",
       headers,
       body: JSON.stringify({
-        anthropicKey: anthropicKey.trim() || undefined,
-        openRouterKey: openRouterKey.trim() || undefined,
+        keys: Object.keys(keys).length > 0 ? keys : undefined,
         ollamaBaseUrl: ollamaUrl.trim() || undefined,
       }),
     });
     const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
     onFlash(data.message ?? data.error ?? "ไม่ทราบผล");
-    setAnthropicKey("");
-    setOpenRouterKey("");
+    // ล้างช่องคีย์ทิ้งเสมอ ไม่ให้ค้างอยู่บนหน้าจอหลังบันทึก
+    setKeyDrafts({});
     await refresh();
   }
 
@@ -833,7 +856,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   }
 
   const keysDirty =
-    Boolean(anthropicKey.trim()) || Boolean(openRouterKey.trim()) || Boolean(ollamaUrl.trim());
+    Object.values(keyDrafts).some((v) => v.trim().length > 0) || Boolean(ollamaUrl.trim());
 
   return (
     <div className="space-y-4">
@@ -903,13 +926,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           <input
             value={llm.model}
             onChange={(e) => setLlm({ ...llm, model: e.target.value })}
-            placeholder={
-              effectiveProvider === "anthropic"
-                ? "claude-opus-5"
-                : effectiveProvider === "openrouter"
-                  ? "anthropic/claude-sonnet-4.5"
-                  : "llama3.1"
-            }
+            placeholder={MODEL_PLACEHOLDER[effectiveProvider] ?? "ชื่อโมเดล"}
             autoComplete="off"
             spellCheck={false}
             className="field"
@@ -1007,27 +1024,22 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           </Field>
         ) : null}
 
-        <Field label="ANTHROPIC_API_KEY">
-          <input
-            type="password"
-            value={anthropicKey}
-            onChange={(e) => setAnthropicKey(e.target.value)}
-            placeholder="sk-ant-..."
-            autoComplete="off"
-            className="field"
-          />
-        </Field>
-
-        <Field label="OPENROUTER_API_KEY">
-          <input
-            type="password"
-            value={openRouterKey}
-            onChange={(e) => setOpenRouterKey(e.target.value)}
-            placeholder="sk-or-v1-..."
-            autoComplete="off"
-            className="field"
-          />
-        </Field>
+        {(cfg?.providers ?? [])
+          .filter((p) => p.envKey)
+          .map((p) => (
+            <Field key={p.provider} label={p.envKey!}>
+              <input
+                type="password"
+                value={keyDrafts[p.provider] ?? ""}
+                onChange={(e) =>
+                  setKeyDrafts({ ...keyDrafts, [p.provider]: e.target.value })
+                }
+                placeholder={p.ready ? `ตั้งไว้แล้ว · ${p.maskedKey}` : KEY_PLACEHOLDER[p.provider]}
+                autoComplete="off"
+                className="field"
+              />
+            </Field>
+          ))}
 
         <Field label="OLLAMA_BASE_URL (เว้นว่าง = ไม่เปลี่ยน)">
           <input

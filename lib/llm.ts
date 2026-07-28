@@ -5,10 +5,15 @@ import Anthropic from "@anthropic-ai/sdk";
 /**
  * ชั้นกลางที่คุยกับ LLM ทุกเจ้า
  *
- * รองรับ 3 ผู้ให้บริการ:
+ * รองรับ 5 ผู้ให้บริการ:
  *   anthropic  — เรียกผ่าน @anthropic-ai/sdk (structured output ของ Claude)
- *   openrouter — HTTP ตรงไปที่ /api/v1/chat/completions (รูปแบบเดียวกับ OpenAI)
- *   ollama     — HTTP ตรงไปที่ /api/chat ของเครื่องที่รัน Ollama อยู่
+ *   openai     — POST /v1/chat/completions
+ *   gemini     — POST /v1beta/openai/chat/completions (Google มี endpoint ที่เข้ากันได้กับ OpenAI)
+ *   openrouter — POST /api/v1/chat/completions
+ *   ollama     — POST /api/chat ของเครื่องที่รัน Ollama อยู่
+ *
+ * สามเจ้ากลางใช้รูปแบบ OpenAI เหมือนกันหมด จึงเดินทางเดียวกันใน
+ * callOpenAiCompatJson() ต่างกันแค่ base URL, ชื่อ env ของคีย์ และชื่อพารามิเตอร์ token
  *
  * แบ่งความรับผิดชอบไว้ชัด:
  *   - "คีย์" อยู่ฝั่งเซิร์ฟเวอร์เท่านั้น (env) ไม่เคยผ่าน client
@@ -16,12 +21,20 @@ import Anthropic from "@anthropic-ai/sdk";
  *     แต่ต้องผ่าน allowlist + regex ก่อนเสมอ กัน client ยัดค่ามั่ว
  */
 
-export type LlmProvider = "anthropic" | "openrouter" | "ollama";
+export type LlmProvider = "anthropic" | "openai" | "gemini" | "openrouter" | "ollama";
 
-export const LLM_PROVIDERS: LlmProvider[] = ["anthropic", "openrouter", "ollama"];
+export const LLM_PROVIDERS: LlmProvider[] = [
+  "anthropic",
+  "openai",
+  "gemini",
+  "openrouter",
+  "ollama",
+];
 
 export const PROVIDER_LABEL: Record<LlmProvider, string> = {
   anthropic: "Anthropic (Claude)",
+  openai: "OpenAI (GPT)",
+  gemini: "Google (Gemini)",
   openrouter: "OpenRouter",
   ollama: "Ollama (เครื่องตัวเอง)",
 };
@@ -29,6 +42,8 @@ export const PROVIDER_LABEL: Record<LlmProvider, string> = {
 /** ใช้ตอนผู้ใช้ยังไม่เคยเลือกโมเดลของเจ้านั้น */
 export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: "claude-opus-5",
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.0-flash",
   openrouter: "anthropic/claude-sonnet-4.5",
   ollama: "llama3.1",
 };
@@ -41,11 +56,51 @@ const FALLBACK_MODELS: Record<LlmProvider, string[]> = {
     "claude-fable-5",
     "claude-haiku-4-5-20251001",
   ],
+  openai: [],
+  gemini: [],
   openrouter: [],
   ollama: [],
 };
 
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+type OpenAiCompatProvider = "openai" | "gemini" | "openrouter";
+
+interface OpenAiCompatConfig {
+  baseUrl: string;
+  envKey: string;
+  /** โมเดลรุ่นใหม่ของ OpenAI ปฏิเสธ max_tokens ต้องใช้ max_completion_tokens แทน */
+  tokenParam: "max_tokens" | "max_completion_tokens";
+  /** ดูรายชื่อโมเดลได้โดยไม่ต้องมีคีย์ไหม */
+  publicModelList: boolean;
+  /** ตัดโมเดลที่ไม่ใช่ chat ออกจากดรอปดาวน์ (embedding, รูป, เสียง) */
+  skipModel?: RegExp;
+}
+
+const OPENAI_COMPAT: Record<OpenAiCompatProvider, OpenAiCompatConfig> = {
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    envKey: "OPENAI_API_KEY",
+    tokenParam: "max_completion_tokens",
+    publicModelList: false,
+    skipModel: /embed|tts|whisper|dall-e|moderation|audio|realtime|image|transcribe|sora/i,
+  },
+  gemini: {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    envKey: "GEMINI_API_KEY",
+    tokenParam: "max_tokens",
+    publicModelList: false,
+    skipModel: /embedding|aqa|imagen|veo|tts|native-audio|learnlm/i,
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    envKey: "OPENROUTER_API_KEY",
+    tokenParam: "max_tokens",
+    publicModelList: true,
+  },
+};
+
+function isOpenAiCompat(provider: LlmProvider): provider is OpenAiCompatProvider {
+  return provider === "openai" || provider === "gemini" || provider === "openrouter";
+}
 
 export function ollamaBaseUrl(): string {
   const raw = process.env.OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434";
@@ -122,15 +177,23 @@ export function anthropicKey(): string | undefined {
   return process.env.ANTHROPIC_API_KEY?.trim() || undefined;
 }
 
-export function openRouterKey(): string | undefined {
-  return process.env.OPENROUTER_API_KEY?.trim() || undefined;
+/** ชื่อ env ที่ต้องตั้งของเจ้านั้น — Ollama ไม่ต้องใช้คีย์จึงเป็น null */
+export function providerEnvKey(provider: LlmProvider): string | null {
+  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
+  if (provider === "ollama") return null;
+  return OPENAI_COMPAT[provider].envKey;
+}
+
+export function providerKey(provider: LlmProvider): string | undefined {
+  const envKey = providerEnvKey(provider);
+  if (!envKey) return undefined;
+  return process.env[envKey]?.trim() || undefined;
 }
 
 /** Ollama ไม่ต้องใช้คีย์ ขอแค่มี URL — จะรู้ว่าต่อติดจริงไหมตอนกดทดสอบ */
 export function isProviderReady(provider: LlmProvider): boolean {
-  if (provider === "anthropic") return Boolean(anthropicKey());
-  if (provider === "openrouter") return Boolean(openRouterKey());
-  return true;
+  if (provider === "ollama") return true;
+  return Boolean(providerKey(provider));
 }
 
 let cachedAnthropic: Anthropic | null = null;
@@ -212,8 +275,8 @@ export async function callLlmJson<T>(
     if (choice.provider === "anthropic") {
       return await callAnthropicJson<T>(choice.model, options, timeoutMs);
     }
-    if (choice.provider === "openrouter") {
-      return await callOpenRouterJson<T>(choice.model, options, timeoutMs);
+    if (isOpenAiCompat(choice.provider)) {
+      return await callOpenAiCompatJson<T>(choice.provider, choice.model, options, timeoutMs);
     }
     return await callOllamaJson<T>(choice.model, options, timeoutMs);
   } catch (error) {
@@ -252,17 +315,24 @@ async function callAnthropicJson<T>(
   return parseJsonLoose<T>(extractAnthropicText(message));
 }
 
+interface ChatCompletion {
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
 /**
- * OpenRouter ใช้รูปแบบเดียวกับ OpenAI chat completions
- * ส่ง response_format แบบ json_schema ไปก่อน ถ้าโมเดลนั้นไม่รองรับแล้วโดนปฏิเสธ
+ * ทางเดินร่วมของ OpenAI / Gemini / OpenRouter — ทั้งสามใช้รูปแบบ chat completions เหมือนกัน
+ *
+ * ส่ง response_format แบบ json_schema ไปก่อน ถ้าโมเดลนั้นไม่รองรับแล้วโดนปฏิเสธด้วย 4xx
  * จะลองใหม่อีกรอบโดยไม่ส่ง response_format แล้วอาศัยสคีมาที่ฝังใน system prompt แทน
  */
-async function callOpenRouterJson<T>(
+async function callOpenAiCompatJson<T>(
+  provider: OpenAiCompatProvider,
   model: string,
   { system, prompt, schema, maxTokens, tag }: LlmJsonOptions,
   timeoutMs: number,
 ): Promise<T | null> {
-  const key = openRouterKey();
+  const cfg = OPENAI_COMPAT[provider];
+  const key = providerKey(provider);
   if (!key) return null;
 
   const messages = [
@@ -271,19 +341,19 @@ async function callOpenRouterJson<T>(
   ];
 
   const send = (structured: boolean) =>
-    fetchJson<{ choices?: Array<{ message?: { content?: string } }> }>(
-      `${OPENROUTER_BASE}/chat/completions`,
+    fetchJson<ChatCompletion>(
+      `${cfg.baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
-          "X-Title": "Bai Jing Bai Lok",
+          ...(provider === "openrouter" ? { "X-Title": "Bai Jing Bai Lok" } : {}),
         },
         body: JSON.stringify({
           model,
           messages,
-          max_tokens: maxTokens,
+          [cfg.tokenParam]: maxTokens,
           ...(structured
             ? {
                 response_format: {
@@ -297,7 +367,7 @@ async function callOpenRouterJson<T>(
       timeoutMs,
     );
 
-  let data: { choices?: Array<{ message?: { content?: string } }> };
+  let data: ChatCompletion;
   try {
     data = await send(true);
   } catch (error) {
@@ -349,7 +419,7 @@ export interface ModelOption {
 export async function listModels(provider: LlmProvider): Promise<ModelOption[]> {
   try {
     if (provider === "anthropic") return await listAnthropicModels();
-    if (provider === "openrouter") return await listOpenRouterModels();
+    if (isOpenAiCompat(provider)) return await listOpenAiCompatModels(provider);
     return await listOllamaModels();
   } catch (error) {
     console.warn(`[models] ดึงรายชื่อโมเดลของ ${provider} ไม่สำเร็จ:`, describeError(error));
@@ -368,15 +438,28 @@ async function listAnthropicModels(): Promise<ModelOption[]> {
     : FALLBACK_MODELS.anthropic.map((id) => ({ id, label: id }));
 }
 
-async function listOpenRouterModels(): Promise<ModelOption[]> {
-  // endpoint นี้เปิดสาธารณะ ไม่ต้องใช้คีย์ก็ดูรายชื่อได้
+async function listOpenAiCompatModels(
+  provider: OpenAiCompatProvider,
+): Promise<ModelOption[]> {
+  const cfg = OPENAI_COMPAT[provider];
+  const key = providerKey(provider);
+  // OpenRouter เปิดรายชื่อสาธารณะ ส่วน OpenAI/Gemini ต้องมีคีย์ก่อนถึงจะดูได้
+  if (!key && !cfg.publicModelList) return [];
+
   const data = await fetchJson<{ data?: Array<{ id?: string; name?: string }> }>(
-    `${OPENROUTER_BASE}/models`,
-    { headers: { Accept: "application/json" } },
+    `${cfg.baseUrl}/models`,
+    {
+      headers: {
+        Accept: "application/json",
+        ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      },
+    },
     15_000,
   );
+
   return (data.data ?? [])
     .filter((m): m is { id: string; name?: string } => typeof m.id === "string")
+    .filter((m) => !cfg.skipModel?.test(m.id))
     .map((m) => ({ id: m.id, label: m.name || m.id }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -439,22 +522,24 @@ async function pingProvider(choice: LlmChoice): Promise<string> {
     return extractAnthropicText(message);
   }
 
-  if (choice.provider === "openrouter") {
-    const key = openRouterKey();
-    if (!key) throw new Error("ยังไม่ได้ตั้ง OPENROUTER_API_KEY");
-    const data = await fetchJson<{ choices?: Array<{ message?: { content?: string } }> }>(
-      `${OPENROUTER_BASE}/chat/completions`,
+  if (isOpenAiCompat(choice.provider)) {
+    const cfg = OPENAI_COMPAT[choice.provider];
+    const key = providerKey(choice.provider);
+    if (!key) throw new Error(`ยังไม่ได้ตั้ง ${cfg.envKey}`);
+    const data = await fetchJson<ChatCompletion>(
+      `${cfg.baseUrl}/chat/completions`,
       {
         method: "POST",
         headers: {
           Authorization: `Bearer ${key}`,
           "Content-Type": "application/json",
-          "X-Title": "Bai Jing Bai Lok",
+          ...(choice.provider === "openrouter" ? { "X-Title": "Bai Jing Bai Lok" } : {}),
         },
         body: JSON.stringify({
           model: choice.model,
           messages: [{ role: "user", content: PING }],
-          max_tokens: 100,
+          // โมเดลที่คิดก่อนตอบกินโทเคนไปกับ reasoning ให้เผื่อไว้หน่อยจะได้ไม่ได้ค่าว่าง
+          [cfg.tokenParam]: 2000,
         }),
       },
       30_000,

@@ -45,8 +45,10 @@ HINT_MODEL=claude-haiku-4-5
 
 | ตัวแปร | จำเป็น | ใช้ทำอะไร |
 | --- | --- | --- |
-| `LLM_PROVIDER` | ไม่ | `anthropic` (ดีฟอลต์) / `openrouter` / `ollama` — เป็นแค่ค่าตั้งต้น หลังบ้านเลือกทับได้ |
+| `LLM_PROVIDER` | ไม่ | `anthropic` (ดีฟอลต์) / `openai` / `gemini` / `openrouter` / `ollama` — เป็นแค่ค่าตั้งต้น หลังบ้านเลือกทับได้ |
 | `ANTHROPIC_API_KEY` | ไม่ (แต่ควรมี) | สร้างคำใบ้ ตรวจอัตนัย และสรุปผล ไม่มีก็ใช้โหมดสำรอง |
+| `OPENAI_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `openai` |
+| `GEMINI_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `gemini` |
 | `OPENROUTER_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `openrouter` |
 | `OLLAMA_BASE_URL` | ไม่ | ดีฟอลต์ `http://127.0.0.1:11434` — บน Vercel เรียก localhost ไม่ได้ |
 | `HINT_MODEL` | ไม่ | โมเดลตั้งต้น ต้องเป็นชื่อของ provider ที่ตั้งไว้ ดีฟอลต์ `claude-opus-5` |
@@ -160,14 +162,24 @@ final 4 ข้อ/20 วิ/2 กล่อง `normalizeSettings()` clamp `maxOp
 `PROVIDER_LABEL`, `DEFAULT_MODEL` แล้วเขียนฟังก์ชัน `call*Json` / `list*Models` ของเจ้านั้น
 ส่วน `hintEngine` กับ API route ไม่ต้องแตะ เพราะคุยผ่าน `callLlmJson()` อย่างเดียว
 
-| เจ้า | โครงสร้างที่ใช้ | โมเดลตั้งต้น |
-| --- | --- | --- |
-| `anthropic` | Anthropic SDK + `output_config.json_schema` | `claude-opus-5` |
-| `openrouter` | `POST /api/v1/chat/completions` (รูปแบบ OpenAI) | `anthropic/claude-sonnet-4.5` |
-| `ollama` | `POST /api/chat` + ฟิลด์ `format` เป็น JSON Schema | `llama3.1` |
+| เจ้า | โครงสร้างที่ใช้ | คีย์ | โมเดลตั้งต้น |
+| --- | --- | --- | --- |
+| `anthropic` | Anthropic SDK + `output_config.json_schema` | `ANTHROPIC_API_KEY` | `claude-opus-5` |
+| `openai` | `POST /v1/chat/completions` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `gemini` | `POST /v1beta/openai/chat/completions` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+| `openrouter` | `POST /api/v1/chat/completions` | `OPENROUTER_API_KEY` | `anthropic/claude-sonnet-4.5` |
+| `ollama` | `POST /api/chat` + ฟิลด์ `format` เป็น JSON Schema | — | `llama3.1` |
 
-OpenRouter ส่ง `response_format: json_schema` ไปก่อน ถ้าโมเดลนั้นไม่รองรับแล้วตอบ 4xx
-จะลองใหม่แบบไม่บังคับสคีมา แล้วอาศัยสคีมาที่ฝังไว้ใน system prompt + `parseJsonLoose()` แทน
+**สามเจ้ากลางเดินทางเดียวกัน** ใน `callOpenAiCompatJson()` เพราะ OpenAI, Gemini
+(ผ่าน compatibility layer ของ Google) และ OpenRouter ใช้รูปแบบ chat completions เหมือนกัน
+ต่างกันแค่ base URL, ชื่อ env ของคีย์ และชื่อพารามิเตอร์จำกัดโทเคน — ตารางอยู่ใน
+`OPENAI_COMPAT` ของ `lib/llm.ts` เพิ่มเจ้าใหม่แค่เติมแถวเดียว
+
+- **OpenAI ใช้ `max_completion_tokens`** ไม่ใช่ `max_tokens` เพราะโมเดลรุ่นใหม่ปฏิเสธตัวหลัง
+- ทั้งสามส่ง `response_format: json_schema` ไปก่อน ถ้าโมเดลนั้นไม่รองรับแล้วตอบ 4xx
+  จะลองใหม่แบบไม่บังคับสคีมา แล้วอาศัยสคีมาที่ฝังไว้ใน system prompt + `parseJsonLoose()` แทน
+- รายชื่อโมเดลของ OpenAI/Gemini กรองตัวที่ไม่ใช่ chat ออก (embedding, รูป, เสียง)
+  ด้วย `skipModel` ไม่งั้นดรอปดาวน์จะเต็มไปด้วยโมเดลที่เลือกไปก็ใช้ไม่ได้
 
 ---
 
@@ -182,11 +194,11 @@ branch อื่น/PR = Preview, ส่วน Development คือ `vercel dev
 
 | Environment | ตั้งอะไร |
 | --- | --- |
-| **Production** | คีย์จริงของเจ้าที่จะใช้ (`ANTHROPIC_API_KEY` และ/หรือ `OPENROUTER_API_KEY`) |
+| **Production** | คีย์จริงของเจ้าที่จะใช้ (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`) |
 | **Preview** | คีย์แยกอีกใบ + `HINT_MODEL=claude-haiku-4-5-20251001` |
 | **Development** | ไม่ต้องใส่ใน Vercel — ใช้ `.env.local` พอ |
 
-ใส่คีย์ได้ทั้งสองเจ้าพร้อมกัน แล้วสลับไปมาจากหลังบ้านโดยไม่ต้อง redeploy
+ใส่คีย์ได้หลายเจ้าพร้อมกัน แล้วสลับไปมาจากหลังบ้านโดยไม่ต้อง redeploy
 ส่วน **Ollama ใช้บน Vercel ไม่ได้** เพราะเซิร์ฟเวอร์ของ Vercel เรียก `localhost`
 ของเครื่องคุณไม่ถึง — จะใช้ต้องรันในเครื่อง หรือเปิด Ollama ออกอินเทอร์เน็ตแล้วตั้ง
 `OLLAMA_BASE_URL` เป็น URL นั้น (ซึ่งต้องมีการป้องกันเอง)

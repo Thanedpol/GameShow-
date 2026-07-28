@@ -107,7 +107,13 @@ export function resetSettings(): void {
  *
  * "auto" = ใช้ค่าที่ตั้งไว้ใน env ของเซิร์ฟเวอร์ (LLM_PROVIDER / HINT_MODEL)
  */
-export type LlmProviderChoice = "auto" | "anthropic" | "openrouter" | "ollama";
+export type LlmProviderChoice =
+  | "auto"
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "openrouter"
+  | "ollama";
 
 export interface LlmSettings {
   provider: LlmProviderChoice;
@@ -120,6 +126,8 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = { provider: "auto", model: "" }
 const PROVIDER_CHOICES: LlmProviderChoice[] = [
   "auto",
   "anthropic",
+  "openai",
+  "gemini",
   "openrouter",
   "ollama",
 ];
