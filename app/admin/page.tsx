@@ -236,7 +236,12 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
           />
           <button
             onClick={() => {
-              if (!window.confirm("คืนค่าคลังคำถามกลับเป็นชุดตั้งต้น 20 ข้อ?")) return;
+              if (
+                !window.confirm(
+                  `คืนค่าคลังคำถามกลับเป็นชุดตั้งต้น ${QUESTION_BANK.length} ข้อ?`,
+                )
+              )
+                return;
               resetQuestions();
               setQuestions(QUESTION_BANK);
               setCustom(false);
@@ -451,6 +456,45 @@ function QuestionEditor({
           ) : null}
         </>
       )}
+
+      <div className="rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] p-3">
+        <p className="mb-2 text-[11px] leading-relaxed text-cyan-100">
+          คำใบ้ของข้อนี้ — บรรทัดละ 1 อัน ควรมีอย่างละ 3 อัน
+          เพราะกล่องหนึ่งข้อสุ่มได้สูงสุด 3 กล่องต่อฝั่ง
+          <br />
+          ใช้ตรง ๆ ในโหมดสำรอง และเป็นตัวอย่างน้ำเสียงให้ AI ตอนมี API key
+        </p>
+        <div className="space-y-2">
+          <Field label="ใบ้จริง — ชี้ทางด้วยหลักการ ไม่เฉลย ไม่ใบ้จากรูปคำ">
+            <textarea
+              value={(draft.hints?.real ?? []).join("\n")}
+              onChange={(e) =>
+                set("hints", {
+                  real: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+                  fake: draft.hints?.fake ?? [],
+                })
+              }
+              rows={3}
+              placeholder="เช่น ตัวที่ตอบเป็นโรงงานเคมีของร่างกาย น้ำดีเป็นแค่งานหนึ่งของมัน"
+              className="field resize-y text-xs"
+            />
+          </Field>
+          <Field label="ใบ้หลอก — ท่อนแรกจริง ท่อนหลังฟังดูน่าเชื่อแต่ผิด (ห้ามอ้างแหล่งปลอม)">
+            <textarea
+              value={(draft.hints?.fake ?? []).join("\n")}
+              onChange={(e) =>
+                set("hints", {
+                  real: draft.hints?.real ?? [],
+                  fake: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+                })
+              }
+              rows={3}
+              placeholder="เช่น น้ำดีช่วยย่อยไขมันจริง และมันถูกสร้างในถุงรูปลูกแพร์ใต้ชายโครงขวา"
+              className="field resize-y text-xs"
+            />
+          </Field>
+        </div>
+      </div>
 
       <Field label="คำอธิบายเฉลย (ไม่บังคับ)">
         <textarea

@@ -131,7 +131,22 @@ export function sanitizeQuestion(input: unknown): Question | null {
       : undefined,
     task: typeof q.task === "string" ? q.task : undefined,
     explanation: typeof q.explanation === "string" ? q.explanation : undefined,
+    hints: sanitizeHints(q.hints),
   };
+}
+
+const asLines = (v: unknown): string[] =>
+  Array.isArray(v)
+    ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    : [];
+
+function sanitizeHints(input: unknown): Question["hints"] {
+  if (!input || typeof input !== "object") return undefined;
+  const h = input as Record<string, unknown>;
+  const real = asLines(h.real);
+  const fake = asLines(h.fake);
+  if (real.length === 0 && fake.length === 0) return undefined;
+  return { real, fake };
 }
 
 export function loadQuestions(): Question[] {
