@@ -103,7 +103,7 @@ function isOpenAiCompat(provider: LlmProvider): provider is OpenAiCompatProvider
 }
 
 export function ollamaBaseUrl(): string {
-  const raw = process.env.OLLAMA_BASE_URL?.trim() || "http://127.0.0.1:11434";
+  const raw = readEnvLoose("OLLAMA_BASE_URL") || "http://127.0.0.1:11434";
   return raw.replace(/\/+$/, "");
 }
 
@@ -140,12 +140,11 @@ export function sanitizeModel(value: unknown): string | null {
 
 /** ค่าตั้งต้นจาก env — ใช้เมื่อ client ไม่ได้ส่งอะไรมา */
 export function envChoice(): LlmChoice {
-  const provider = isProvider(process.env.LLM_PROVIDER?.trim())
-    ? (process.env.LLM_PROVIDER!.trim() as LlmProvider)
-    : "anthropic";
+  const raw = readEnvLoose("LLM_PROVIDER")?.toLowerCase();
+  const provider = isProvider(raw) ? raw : "anthropic";
   return {
     provider,
-    model: sanitizeModel(process.env.HINT_MODEL) ?? DEFAULT_MODEL[provider],
+    model: sanitizeModel(readEnvLoose("HINT_MODEL")) ?? DEFAULT_MODEL[provider],
   };
 }
 
@@ -173,8 +172,32 @@ export function resolveLlm(input?: LlmChoiceInput | null): LlmChoice {
 // สถานะความพร้อมของแต่ละเจ้า
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * อ่านค่า env โดยไม่สนตัวพิมพ์เล็ก/ใหญ่
+ *
+ * ชื่อ env เป็น case-sensitive และแพลตฟอร์มอย่าง Vercel เก็บชื่อตามที่พิมพ์เป๊ะ ๆ
+ * คนจึงตั้งเป็น Gemini_API_Key แล้วงงว่าทำไมไม่ทำงาน แถมหน้า Settings ของ Vercel
+ * แก้ได้แค่ "ค่า" ไม่ได้แก้ "ชื่อ" ต้องลบทิ้งแล้วสร้างใหม่ ซึ่งไม่ชัดเลย
+ *
+ * การยอมรับชื่อที่ต่างแค่ตัวพิมพ์จึงคุ้มกว่าการยืนกรานให้ตรงเป๊ะ
+ * (ยังเตือนในหลังบ้านอยู่ ผู้ใช้จะได้รู้ว่าควรตั้งชื่อให้ตรงมาตรฐาน)
+ */
+export function readEnvLoose(name: string): string | undefined {
+  const exact = process.env[name]?.trim();
+  if (exact) return exact;
+
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toLowerCase() === wanted) {
+      const trimmed = value?.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return undefined;
+}
+
 export function anthropicKey(): string | undefined {
-  return process.env.ANTHROPIC_API_KEY?.trim() || undefined;
+  return readEnvLoose("ANTHROPIC_API_KEY");
 }
 
 /** ชื่อ env ที่ต้องตั้งของเจ้านั้น — Ollama ไม่ต้องใช้คีย์จึงเป็น null */
@@ -187,7 +210,7 @@ export function providerEnvKey(provider: LlmProvider): string | null {
 export function providerKey(provider: LlmProvider): string | undefined {
   const envKey = providerEnvKey(provider);
   if (!envKey) return undefined;
-  return process.env[envKey]?.trim() || undefined;
+  return readEnvLoose(envKey);
 }
 
 /** Ollama ไม่ต้องใช้คีย์ ขอแค่มี URL — จะรู้ว่าต่อติดจริงไหมตอนกดทดสอบ */

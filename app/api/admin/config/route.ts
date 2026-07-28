@@ -81,16 +81,36 @@ const EXPECTED_ENV = new Set([
 
 const LOOKS_LIKE_OURS = /GEMINI|OPENAI|ANTHROPIC|OPENROUTER|OLLAMA|API_KEY|LLM_|HINT_MODEL/i;
 
-function misspelledEnvNames(): string[] {
-  return Object.keys(process.env)
-    .filter((name) => LOOKS_LIKE_OURS.test(name) && !EXPECTED_ENV.has(name))
-    .slice(0, 20);
+const EXPECTED_LOWER = new Map(
+  [...EXPECTED_ENV].map((name) => [name.toLowerCase(), name] as const),
+);
+
+interface EnvNameReport {
+  /** ชื่อที่ไม่ตรงเลย แม้เทียบแบบไม่สนตัวพิมพ์ — สะกดผิดจริง ใช้งานไม่ได้ */
+  misspelled: string[];
+  /** ชื่อที่ต่างแค่ตัวพิมพ์เล็ก/ใหญ่ — ระบบอ่านให้แล้ว แต่ควรตั้งให้ตรงมาตรฐาน */
+  wrongCase: Array<{ found: string; expected: string }>;
+}
+
+function inspectEnvNames(): EnvNameReport {
+  const misspelled: string[] = [];
+  const wrongCase: Array<{ found: string; expected: string }> = [];
+
+  for (const name of Object.keys(process.env)) {
+    if (!LOOKS_LIKE_OURS.test(name) || EXPECTED_ENV.has(name)) continue;
+    const expected = EXPECTED_LOWER.get(name.toLowerCase());
+    if (expected) wrongCase.push({ found: name, expected });
+    else misspelled.push(name);
+  }
+  return { misspelled: misspelled.slice(0, 20), wrongCase: wrongCase.slice(0, 20) };
 }
 
 export interface AdminConfigResponse {
   providers: ProviderStatus[];
-  /** ชื่อ env ที่คล้ายของเราแต่สะกดไม่ตรง — ว่างเปล่าคือไม่มีปัญหาชื่อ */
+  /** ชื่อ env ที่สะกดผิดจริง ใช้งานไม่ได้ */
   misspelledEnv: string[];
+  /** ชื่อ env ที่ต่างแค่ตัวพิมพ์ — ระบบอ่านให้แล้ว แต่ควรตั้งให้ตรง */
+  wrongCaseEnv: Array<{ found: string; expected: string }>;
   /** ค่าตั้งต้นฝั่งเซิร์ฟเวอร์ ใช้เมื่อหลังบ้านยังไม่ได้เลือกอะไร */
   serverProvider: LlmProvider;
   serverModel: string;
@@ -129,9 +149,11 @@ function buildStatus(): ProviderStatus[] {
 
 export async function GET(request: NextRequest) {
   const fromEnv = envChoice();
+  const envNames = inspectEnvNames();
   const payload: AdminConfigResponse = {
     providers: buildStatus(),
-    misspelledEnv: misspelledEnvNames(),
+    misspelledEnv: envNames.misspelled,
+    wrongCaseEnv: envNames.wrongCase,
     serverProvider: fromEnv.provider,
     serverModel: fromEnv.model,
     ollamaBaseUrl: ollamaBaseUrl(),
