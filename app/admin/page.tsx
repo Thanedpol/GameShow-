@@ -1001,11 +1001,23 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         ) : null}
 
         {cfg?.misspelledEnv.length ? (
-          <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
-            ⚠️ เจอตัวแปรที่ชื่อคล้ายของเราแต่สะกดไม่ตรง:{" "}
-            <b className="font-mono">{cfg.misspelledEnv.join(", ")}</b>{" "}
-            — น่าจะพิมพ์ชื่อผิดหรือมีช่องว่างติดมา ลองตั้งใหม่ให้ตรงเป๊ะ
-          </p>
+          <div className="space-y-1.5 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+            <p>
+              ⚠️ เจอตัวแปรที่ชื่อคล้ายของเราแต่สะกดไม่ตรง:{" "}
+              <b className="font-mono">{cfg.misspelledEnv.join(", ")}</b>
+            </p>
+            <p>
+              ชื่อ env เป็น <b>case-sensitive</b> ต้องตรงทุกตัวอักษร
+              — ตั้งใหม่ให้ตรงเป๊ะแล้วลบตัวเก่าทิ้ง
+            </p>
+            {cfg.environment === "production" ? (
+              <p className="text-amber-200/90">
+                และถ้าเพิ่งแก้ชื่อบน Vercel ต้อง <b>Redeploy ใหม่หลังแก้เสร็จ</b>{" "}
+                เพราะค่า env ถูกผูกไว้กับ deployment ตอน build — deployment เดิม
+                จะยังใช้ค่าเก่าตลอด แม้จะแก้ในหน้า Settings แล้วก็ตาม
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {cfg ? (
