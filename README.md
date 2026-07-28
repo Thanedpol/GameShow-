@@ -64,7 +64,8 @@ app/
   layout.tsx              เชลล์ + แบนเนอร์เตือน (ติดทุกหน้าจอ) + GameProvider
   page.tsx                สลับหน้าจอตาม phase: setup → playing → final → debrief
   globals.css             Tailwind + ธีมเวทีเกมโชว์
-  api/hint/route.ts       POST สร้างคำใบ้ / GET เฉลย label จริง-หลอก
+  api/hint/route.ts       POST สร้างคำใบ้ (คืน revealToken ที่เข้ารหัส label ไว้)
+  api/reveal/route.ts     POST ถอดรหัส revealToken เป็นเฉลย จริง/หลอก + เหตุผล
   api/debrief/route.ts    POST ให้ Claude สรุปว่าคำใบ้แต่ละชุดออกแบบแบบนั้นเพราะอะไร
 components/
   SafetyBanner.tsx        แบนเนอร์เตือนเล็ก ๆ ที่แสดงตลอดเวลา
@@ -116,7 +117,7 @@ lib/
 
 ```
 POST /api/hint   { questionId, correctAnswer, hintType: "ตรง" | "ลวง" | "final" }
-  → { revealId, hints: [{ id, text }], source: "claude" | "fallback" }
+  → { revealToken, hints: [{ id, text }], source: "claude" | "fallback" }
 ```
 
 - **`"ตรง"`** — system prompt บังคับให้เป็นเบาะแสที่ตรวจสอบได้จริง ใกล้เคียงคำตอบ
@@ -131,13 +132,22 @@ POST /api/hint   { questionId, correctAnswer, hintType: "ตรง" | "ลวง
 ถ้าคำถามอยู่ในหมวดอ่อนไหว ให้ทำส่วนหลอกจาก trivia สมมติแทน (ตำรา/รายการ/เมือง
 ที่ไม่มีอยู่จริง) โดยไม่แตะข้อเท็จจริงที่คนนำไปอ้างอิงต่อได้
 
-**Label จริง/หลอกไม่ถูกส่งไปฝั่ง client** ตอนสร้างคำใบ้ — เก็บไว้ใน `Map` ฝั่งเซิร์ฟเวอร์
-พร้อม `rationale` (เหตุผลการออกแบบ) แล้วดึงตอนเฉลยผ่าน:
+**Label จริง/หลอกไม่ถูกส่งไปฝั่ง client** ตอนสร้างคำใบ้ — client ได้แค่ `{ id, text }`
+ส่วน `truth` / `mode` / `rationale` ถูก **เข้ารหัส AES-256-GCM** ใส่ไว้ใน `revealToken`
+ซึ่ง client ถือไว้เฉย ๆ (อ่านไม่ออก และแก้ไม่ได้เพราะมี auth tag) แล้วส่งกลับมาตอนเฉลย:
 
 ```
-GET /api/hint?revealId=...
-  → { revealId, questionId, hints: [{ id, text, truth, mode, rationale }] }
+POST /api/reveal   { revealToken }
+  → { questionId, hints: [{ id, text, truth, mode, rationale }] }
 ```
+
+ที่ออกแบบแบบ **stateless** เพราะ serverless (Vercel) แต่ละ request อาจไปคนละ instance
+ถ้าเก็บ label ไว้ใน memory ฝั่งเซิร์ฟเวอร์ ตอนเฉลยจะหาไม่เจอแบบสุ่ม ๆ
+วิธีนี้จึงไม่ต้องพึ่ง Redis/DB เพิ่ม และไม่มี state ค้างในเซิร์ฟเวอร์เลย
+
+คีย์เข้ารหัสมาจาก `REVEAL_SECRET` ถ้าตั้งไว้ ไม่งั้น derive จาก `ANTHROPIC_API_KEY`
+ผ่าน HKDF-SHA256 (ค่าคงที่ทุก instance อยู่แล้ว) — deploy ได้โดยไม่ต้องตั้ง env เพิ่ม
+token มีอายุ 1 ชั่วโมง เกินจากนั้นถอดไม่ผ่าน
 
 ---
 
@@ -179,15 +189,44 @@ GET /api/hint?revealId=...
 
 ## ข้อจำกัดที่ควรรู้ (ยอมรับได้ในระดับ prototype)
 
-- **Label จริง/หลอกเก็บใน memory ของ process** — รีสตาร์ทเซิร์ฟเวอร์แล้วหาย
-  หน้าเฉลยจะขึ้นว่า "ไม่พบข้อมูลคำใบ้ชุดนี้" (เกมยังเล่นต่อได้ปกติ)
-  ถ้าจะขึ้น production ควรย้ายไปเก็บใน Redis/DB หรือเซ็นเป็น signed token
+- **`/api/hint` ไม่มี auth** — ใครได้ URL ก็ยิงถล่มเผาเครดิต Claude ได้
+  ถ้า deploy สาธารณะควรเปิด Deployment Protection หรือใส่ rate limit ก่อน
+- **client ขอเฉลยล่วงหน้าได้** — `revealToken` อยู่ในมือ client ตั้งแต่ตอนได้คำใบ้
+  จะยิง `/api/reveal` ดูก่อนตอบก็ได้ (แม้จะอ่าน token เองไม่ออก)
+  ถ้าจะใช้แข่งจริงต้องผูกการเฉลยกับ state ฝั่งเซิร์ฟเวอร์
 - **คลังคำถามถูก bundle ไปฝั่ง client ด้วย** (เพราะ reducer สุ่มคำถามฝั่ง client)
   แปลว่าเปิด devtools แล้วเห็นเฉลยได้ — ยอมรับได้สำหรับ prototype
   แต่ถ้าจะใช้แข่งจริงต้องย้ายการสุ่มและการตรวจคำตอบไปไว้ฝั่งเซิร์ฟเวอร์ทั้งหมด
 - **เกมอยู่บนเครื่องเดียว (hot-seat)** ผู้เล่นสองคนผลัดกันใช้จอเดียวกัน
   ยังไม่มี realtime/multi-device
 - state หายเมื่อรีเฟรช (ตามที่โจทย์ระบุว่ายอมรับได้)
+
+---
+
+## Deploy ขึ้น Vercel
+
+Repo อยู่บน GitHub แล้ว ใช้วิธี import ง่ายที่สุด:
+
+1. vercel.com → **Add New… → Project** → Import repo นี้
+2. Framework Preset จะ detect **Next.js** เอง ไม่ต้องแก้ Build Command / Output Directory
+3. ใส่ Environment Variables ตามตารางข้างล่าง
+4. กด **Deploy**
+
+Vercel แจก 3 environment มาให้เองโดยไม่ต้องตั้งค่าอะไร — push เข้า `main` = Production,
+push branch อื่นหรือเปิด PR = Preview, ส่วน Development คือ `vercel dev` ในเครื่อง
+
+| Environment | ตั้ง env var อะไร |
+| --- | --- |
+| **Production** | `ANTHROPIC_API_KEY` คีย์จริง |
+| **Preview** | คีย์แยกอีกใบ + `HINT_MODEL=claude-haiku-4-5` (เร็วกว่า ถูกกว่า) |
+| **Development** | ไม่ต้องใส่ใน Vercel — ใช้ `.env.local` ในเครื่องพอ |
+
+**ควรแยกคีย์ Preview** เพราะ `/api/hint` ไม่มี auth ใครได้ URL ก็ยิงเผาเครดิตได้
+และควรเปิด **Settings → Deployment Protection → Vercel Authentication** ให้ Preview ด้วย
+(มีใน Hobby plan) เพื่อบังคับล็อกอินก่อนเข้า
+
+> `maxDuration = 60` ถูกตั้งไว้แล้วใน `api/hint` และ `api/debrief` เพราะดีฟอลต์ 10 วินาที
+> ของ Vercel ไม่พอสำหรับรอบ Final ที่ยิง Claude 3 คำขอพร้อมกัน
 
 ---
 

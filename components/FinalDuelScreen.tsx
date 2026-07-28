@@ -22,7 +22,7 @@ export default function FinalDuelScreen() {
 
   const [stage, setStage] = useState<Stage>("loading");
   const [hints, setHints] = useState<PublicHint[]>([]);
-  const [revealId, setRevealId] = useState<string | null>(null);
+  const [revealToken, setRevealToken] = useState<string | null>(null);
   const [source, setSource] = useState<"claude" | "fallback">("claude");
   const [revealedHints, setRevealedHints] = useState<RevealedHint[] | null>(null);
 
@@ -37,8 +37,8 @@ export default function FinalDuelScreen() {
   const resolvedRef = useRef(false);
   // กัน React StrictMode (dev) ยิง /api/hint ซ้ำสองรอบ
   const fetchedRef = useRef(false);
-  const stateRef = useRef({ p1Choice, p2Choice, revealId, hints, p1Trust, p2Trust });
-  stateRef.current = { p1Choice, p2Choice, revealId, hints, p1Trust, p2Trust };
+  const stateRef = useRef({ p1Choice, p2Choice, revealToken, hints, p1Trust, p2Trust });
+  stateRef.current = { p1Choice, p2Choice, revealToken, hints, p1Trust, p2Trust };
 
   const finishDuel = useCallback(() => {
     if (resolvedRef.current) return;
@@ -48,18 +48,18 @@ export default function FinalDuelScreen() {
     const hintsUsed: Array<{
       player: PlayerId;
       text: string;
-      revealId: string;
+      revealToken: string;
       hintId: string;
     }> = [];
 
-    if (snap.revealId) {
+    if (snap.revealToken) {
       const push = (player: PlayerId, hintId: string | null) => {
         const found = snap.hints.find((h) => h.id === hintId);
         if (found) {
           hintsUsed.push({
             player,
             text: found.text,
-            revealId: snap.revealId as string,
+            revealToken: snap.revealToken as string,
             hintId: found.id,
           });
         }
@@ -73,7 +73,7 @@ export default function FinalDuelScreen() {
       payload: {
         player1Choice: snap.p1Choice,
         player2Choice: snap.p2Choice,
-        revealId: snap.revealId,
+        revealToken: snap.revealToken,
         hintsUsed,
       },
     });
@@ -105,7 +105,7 @@ export default function FinalDuelScreen() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as HintApiResponse;
         setHints(data.hints);
-        setRevealId(data.revealId);
+        setRevealToken(data.revealToken);
         setSource(data.source);
         setStage("locking");
         startTimer(FINAL_SECONDS * 1000);
@@ -125,11 +125,15 @@ export default function FinalDuelScreen() {
 
   // ดึงเฉลยว่าคำใบ้ชุดไหนจริง/หลอก
   useEffect(() => {
-    if (stage !== "revealed" || !revealId) return;
+    if (stage !== "revealed" || !revealToken) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/hint?revealId=${encodeURIComponent(revealId)}`);
+        const res = await fetch("/api/reveal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revealToken }),
+        });
         if (!res.ok) return;
         const data = (await res.json()) as RevealApiResponse;
         if (!cancelled) setRevealedHints(data.hints);
@@ -140,7 +144,7 @@ export default function FinalDuelScreen() {
     return () => {
       cancelled = true;
     };
-  }, [stage, revealId]);
+  }, [stage, revealToken]);
 
   if (!question) return null;
 

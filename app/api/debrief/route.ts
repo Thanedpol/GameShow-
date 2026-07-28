@@ -1,11 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getQuestionById } from "@/lib/questions";
-import { HINT_MODEL, getAnthropic, getReveal, parseJsonLoose } from "@/lib/hintEngine";
+import { HINT_MODEL, getAnthropic, openReveal, parseJsonLoose } from "@/lib/hintEngine";
 import type { DebriefApiRequest, DebriefApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// สรุปผลต้องรอ Claude อ่านคำใบ้ทั้งเกม — ดีฟอลต์ 10 วิของ Vercel ไม่พอ
+export const maxDuration = 60;
 
 interface EnrichedItem {
   index: number;
@@ -95,7 +97,7 @@ export async function POST(request: NextRequest) {
   // เติม label จริง/หลอก + เหตุผลการออกแบบจาก store ฝั่งเซิร์ฟเวอร์
   const items: EnrichedItem[] = history.map((h, index) => {
     const question = getQuestionById(h.questionId);
-    const record = h.revealId ? getReveal(h.revealId) : undefined;
+    const record = h.revealToken ? openReveal(h.revealToken) : null;
     const hint = record?.hints.find((x) => x.id === h.hintId);
     return {
       index,
@@ -107,7 +109,7 @@ export async function POST(request: NextRequest) {
       hintText: h.aiGeneratedText,
       wasCorrect: h.wasCorrect,
       truth: hint?.truth ?? (h.hintType === "ตรง" ? "จริง" : "หลอก"),
-      rationale: hint?.rationale ?? "ไม่พบบันทึกเหตุผล (เซิร์ฟเวอร์อาจรีสตาร์ท)",
+      rationale: hint?.rationale ?? "ไม่พบบันทึกเหตุผล (token หมดอายุหรือคีย์เปลี่ยน)",
       fromFinalDuel: h.fromFinalDuel === true,
     };
   });

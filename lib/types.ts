@@ -39,8 +39,8 @@ export interface HintRequest {
   hintType: HintType;
   aiGeneratedText: string;
   wasCorrect: boolean;
-  /** อ้างอิงไปยัง label ฝั่งเซิร์ฟเวอร์ (ไม่มีข้อมูลจริง/หลอกอยู่ในนี้) */
-  revealId?: string;
+  /** token ที่เข้ารหัส label จริง/หลอกไว้ — client อ่านไม่ออกและปลอมไม่ได้ */
+  revealToken?: string;
   hintId?: string;
   /**
    * true = คำใบ้จากรอบ AI Duel Final ซึ่งผู้เล่นไม่ได้เลือกโหมดเอง
@@ -95,7 +95,7 @@ export interface FinalResult {
   player2Correct: boolean;
   player1Points: number;
   player2Points: number;
-  revealId: string | null;
+  revealToken: string | null;
 }
 
 export interface SessionState extends GameState {
@@ -126,7 +126,8 @@ export interface HintApiRequest {
 }
 
 export interface HintApiResponse {
-  revealId: string;
+  /** token ทึบ ส่งกลับไปที่ POST /api/reveal ตอนต้องการเฉลย */
+  revealToken: string;
   hints: PublicHint[];
   /** "claude" = มาจาก API จริง, "fallback" = โหมดสำรองตอนไม่มี API key */
   source: "claude" | "fallback";
@@ -139,8 +140,11 @@ export interface RevealedHint extends PublicHint {
   rationale: string;
 }
 
+export interface RevealApiRequest {
+  revealToken: string;
+}
+
 export interface RevealApiResponse {
-  revealId: string;
   questionId: string;
   hints: RevealedHint[];
 }

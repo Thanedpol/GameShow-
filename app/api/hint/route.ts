@@ -1,20 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getQuestionById } from "@/lib/questions";
-import {
-  generateFinalHints,
-  generateSingleHint,
-  getReveal,
-  saveReveal,
-} from "@/lib/hintEngine";
-import type {
-  HintApiRequest,
-  HintApiResponse,
-  HintMode,
-  RevealApiResponse,
-} from "@/lib/types";
+import { generateFinalHints, generateSingleHint, sealReveal } from "@/lib/hintEngine";
+import type { HintApiRequest, HintApiResponse, HintMode } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// รอบ final ยิง Claude 3 คำขอพร้อมกัน และโมเดลเปิด thinking อยู่
+// ดีฟอลต์ของ Vercel (10 วิ) ไม่พอ จะได้ 504 แทนคำใบ้
+export const maxDuration = 60;
 
 const VALID_MODES: HintMode[] = ["ตรง", "ลวง", "final"];
 
@@ -22,9 +15,9 @@ const VALID_MODES: HintMode[] = ["ตรง", "ลวง", "final"];
  * POST /api/hint
  * body: { questionId, correctAnswer, hintType: "ตรง" | "ลวง" | "final" }
  *
- * ตอบกลับ: { revealId, hints: [{ id, text }], source }
- * ⚠️ label ว่าคำใบ้ไหน "จริง/หลอก" จะถูกเก็บไว้ฝั่งเซิร์ฟเวอร์เท่านั้น
- *    ดึงได้ผ่าน GET /api/hint?revealId=... ตอนเฉลย
+ * ตอบกลับ: { revealToken, hints: [{ id, text }], source }
+ * ⚠️ label ว่าคำใบ้ไหน "จริง/หลอก" ถูกเข้ารหัสไว้ใน revealToken
+ *    client อ่านไม่ออก — ต้องส่งกลับไปที่ POST /api/reveal เพื่อขอเฉลย
  */
 export async function POST(request: NextRequest) {
   let body: Partial<HintApiRequest>;
@@ -72,12 +65,10 @@ export async function POST(request: NextRequest) {
         ? await generateFinalHints(question, question.correctAnswer)
         : await generateSingleHint(question, question.correctAnswer, hintType);
 
-    const stored = saveReveal(question.id, result.hints);
-
     const payload: HintApiResponse = {
-      revealId: stored.revealId,
+      revealToken: sealReveal(question.id, result.hints),
       // ตัด truth / mode / rationale ออกก่อนส่งให้ client
-      hints: stored.hints.map(({ id, text }) => ({ id, text })),
+      hints: result.hints.map(({ id, text }) => ({ id, text })),
       source: result.source,
     };
 
@@ -91,32 +82,4 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
-}
-
-/**
- * GET /api/hint?revealId=...
- * เฉลยว่าคำใบ้ชุดไหน "จริง" ชุดไหน "หลอก" พร้อมเหตุผลการออกแบบ
- * เรียกหลังหมดเวลา/จบข้อเท่านั้น
- */
-export async function GET(request: NextRequest) {
-  const revealId = request.nextUrl.searchParams.get("revealId");
-  if (!revealId) {
-    return NextResponse.json({ error: "ต้องระบุ revealId" }, { status: 400 });
-  }
-
-  const record = getReveal(revealId);
-  if (!record) {
-    return NextResponse.json(
-      { error: "ไม่พบข้อมูลคำใบ้ชุดนี้ (อาจหมดอายุหรือเซิร์ฟเวอร์รีสตาร์ท)" },
-      { status: 404 },
-    );
-  }
-
-  const payload: RevealApiResponse = {
-    revealId: record.revealId,
-    questionId: record.questionId,
-    hints: record.hints,
-  };
-
-  return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
 }

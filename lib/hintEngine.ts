@@ -1,6 +1,12 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes,
+  randomUUID,
+} from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type { HintType, Question, RevealedHint } from "./types";
 
@@ -22,49 +28,95 @@ export function getAnthropic(): Anthropic | null {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// In-memory reveal store
-// เก็บ label "จริง/หลอก" ไว้ฝั่งเซิร์ฟเวอร์เท่านั้น — frontend เห็นแค่ revealId
-// (prototype: หายเมื่อ restart server ตามที่โจทย์ยอมรับได้)
+// Reveal token — เก็บ label "จริง/หลอก" แบบ stateless
+//
+// เดิมเก็บไว้ใน Map บน globalThis ซึ่งใช้ได้เฉพาะตอนรันเป็น process เดียว
+// พอขึ้น serverless (Vercel) แต่ละ request อาจไปคนละ instance ทำให้หา revealId
+// ไม่เจอแบบสุ่ม ๆ จึงเปลี่ยนมา "เข้ารหัส payload ใส่ไปใน token" แทน
+// — client ถือ token ที่อ่านไม่ออก (AES-256-GCM) และปลอมไม่ได้ (auth tag)
+// — ไม่ต้องพึ่ง Redis/DB เพิ่ม และไม่มี state ค้างในเซิร์ฟเวอร์
 // ────────────────────────────────────────────────────────────────────────────
 
-export interface StoredReveal {
-  revealId: string;
+export interface RevealPayload {
   questionId: string;
   createdAt: number;
   hints: RevealedHint[];
 }
 
 const REVEAL_TTL_MS = 60 * 60 * 1000; // 1 ชั่วโมง
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
-const globalStore = globalThis as unknown as {
-  __hintRevealStore?: Map<string, StoredReveal>;
-};
+/** ใช้เฉพาะตอน dev ที่ยังไม่มีคีย์อะไรเลย — ไม่ใช่ความลับ */
+const DEV_KEY_MATERIAL = "baijing-bailok-dev-only-key-material";
 
-const revealStore: Map<string, StoredReveal> =
-  globalStore.__hintRevealStore ?? (globalStore.__hintRevealStore = new Map());
+let cachedKey: Buffer | null = null;
+let warnedAboutDevKey = false;
 
-function pruneStore() {
-  const cutoff = Date.now() - REVEAL_TTL_MS;
-  for (const [key, value] of revealStore) {
-    if (value.createdAt < cutoff) revealStore.delete(key);
+function getRevealKey(): Buffer {
+  if (cachedKey) return cachedKey;
+
+  const explicit = process.env.REVEAL_SECRET?.trim();
+  // ไม่มี REVEAL_SECRET ก็ derive จาก ANTHROPIC_API_KEY แทน (คงที่ทุก instance
+  // อยู่แล้ว) เพื่อให้ deploy ได้โดยไม่ต้องตั้ง env var เพิ่ม
+  const fallback = process.env.ANTHROPIC_API_KEY?.trim();
+  const material = explicit || fallback || DEV_KEY_MATERIAL;
+
+  if (!explicit && !fallback && !warnedAboutDevKey) {
+    warnedAboutDevKey = true;
+    console.warn(
+      "[reveal] ไม่พบ REVEAL_SECRET และ ANTHROPIC_API_KEY — ใช้คีย์ dev ชั่วคราว " +
+        "ห้ามใช้แบบนี้บน production",
+    );
   }
+
+  cachedKey = Buffer.from(
+    hkdfSync("sha256", material, "baijing-reveal-salt-v1", "reveal-token", 32),
+  );
+  return cachedKey;
 }
 
-export function saveReveal(questionId: string, hints: RevealedHint[]): StoredReveal {
-  pruneStore();
-  const record: StoredReveal = {
-    revealId: randomUUID(),
-    questionId,
-    createdAt: Date.now(),
-    hints,
-  };
-  revealStore.set(record.revealId, record);
-  return record;
+/** เข้ารหัส label เป็น token ทึบ ๆ ที่ปลอดภัยพอจะส่งให้ client ถือไว้ */
+export function sealReveal(questionId: string, hints: RevealedHint[]): string {
+  const payload: RevealPayload = { questionId, createdAt: Date.now(), hints };
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", getRevealKey(), iv);
+  const body = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final(),
+  ]);
+  return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url");
 }
 
-export function getReveal(revealId: string): StoredReveal | undefined {
-  pruneStore();
-  return revealStore.get(revealId);
+/** ถอดรหัส token — คืน null ถ้าโดนแก้ ใช้คีย์คนละตัว หรือหมดอายุ */
+export function openReveal(token: string): RevealPayload | null {
+  try {
+    const raw = Buffer.from(token, "base64url");
+    if (raw.length <= IV_BYTES + TAG_BYTES) return null;
+
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      getRevealKey(),
+      raw.subarray(0, IV_BYTES),
+    );
+    decipher.setAuthTag(raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
+    const json = Buffer.concat([
+      decipher.update(raw.subarray(IV_BYTES + TAG_BYTES)),
+      decipher.final(),
+    ]).toString("utf8");
+
+    const payload = JSON.parse(json) as RevealPayload;
+    if (
+      typeof payload?.createdAt !== "number" ||
+      !Array.isArray(payload.hints) ||
+      Date.now() - payload.createdAt > REVEAL_TTL_MS
+    ) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────

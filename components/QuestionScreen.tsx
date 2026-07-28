@@ -33,7 +33,7 @@ type LocalPhase =
 
 interface ActiveHint {
   text: string;
-  revealId: string;
+  revealToken: string;
   hintId: string;
   source: "claude" | "fallback";
 }
@@ -139,7 +139,7 @@ export default function QuestionScreen() {
         tokenSpent,
         timedOut,
         hint: hint
-          ? { text: hint.text, revealId: hint.revealId, hintId: hint.hintId }
+          ? { text: hint.text, revealToken: hint.revealToken, hintId: hint.hintId }
           : undefined,
       },
     });
@@ -171,7 +171,11 @@ export default function QuestionScreen() {
 
   async function loadReveal(target: ActiveHint) {
     try {
-      const res = await fetch(`/api/hint?revealId=${encodeURIComponent(target.revealId)}`);
+      const res = await fetch("/api/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revealToken: target.revealToken }),
+      });
       if (!res.ok) return;
       const data = (await res.json()) as RevealApiResponse;
       setRevealed(data.hints.find((h) => h.id === target.hintId) ?? null);
@@ -204,7 +208,7 @@ export default function QuestionScreen() {
 
       setHint({
         text: first.text,
-        revealId: data.revealId,
+        revealToken: data.revealToken,
         hintId: first.id,
         source: data.source,
       });

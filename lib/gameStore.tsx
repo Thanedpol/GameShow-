@@ -51,7 +51,7 @@ export interface ResolveRoundPayload {
   /** ข้อมูลคำใบ้ที่ขอไป (ถ้ามี) เพื่อบันทึกลง hintHistory */
   hint?: {
     text: string;
-    revealId: string;
+    revealToken: string;
     hintId: string;
   };
 }
@@ -63,9 +63,9 @@ export interface ResolveStealPayload {
 export interface ResolveFinalPayload {
   player1Choice: string | null;
   player2Choice: string | null;
-  revealId: string | null;
+  revealToken: string | null;
   /** hint ที่แต่ละฝ่ายเลือก "เชื่อ" — บันทึกลง hintHistory เพื่อใช้ตอน debrief */
-  hintsUsed?: Array<{ player: PlayerId; text: string; revealId: string; hintId: string }>;
+  hintsUsed?: Array<{ player: PlayerId; text: string; revealToken: string; hintId: string }>;
 }
 
 export type GameAction =
@@ -146,7 +146,7 @@ function reducer(state: SessionState, action: GameAction): SessionState {
           hintType,
           aiGeneratedText: hint.text,
           wasCorrect,
-          revealId: hint.revealId,
+          revealToken: hint.revealToken,
           hintId: hint.hintId,
         };
         next = { ...next, hintHistory: [...next.hintHistory, record] };
@@ -203,7 +203,7 @@ function reducer(state: SessionState, action: GameAction): SessionState {
       const q = state.finalQuestion;
       if (!q) return state;
 
-      const { player1Choice, player2Choice, revealId, hintsUsed } = action.payload;
+      const { player1Choice, player2Choice, revealToken, hintsUsed } = action.payload;
       const p1Correct = player1Choice === q.correctAnswer;
       const p2Correct = player2Choice === q.correctAnswer;
       const p1Points = scoreForFinal(q.pointValue, p1Correct);
@@ -219,7 +219,7 @@ function reducer(state: SessionState, action: GameAction): SessionState {
         player2Correct: p2Correct,
         player1Points: p1Points,
         player2Points: p2Points,
-        revealId,
+        revealToken,
       };
 
       const extraHints: HintRequest[] = (hintsUsed ?? []).map((h) => ({
@@ -232,7 +232,7 @@ function reducer(state: SessionState, action: GameAction): SessionState {
         fromFinalDuel: true,
         aiGeneratedText: h.text,
         wasCorrect: h.player === 1 ? p1Correct : p2Correct,
-        revealId: h.revealId,
+        revealToken: h.revealToken,
         hintId: h.hintId,
       }));
 
