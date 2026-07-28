@@ -1,7 +1,6 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
 import { MODE_LABEL, STAGE_LABEL } from "@/lib/scoring";
@@ -110,14 +109,7 @@ export default function SetupScreen() {
           เปิดกล่องคำใบ้จาก AI ได้ {cfg.boxCount} กล่อง —
           แต่ในนั้นมีทั้งของจริงและของปลอมปนกัน หน้าที่ของคุณคือแยกให้ออกก่อนหมดเวลา
         </p>
-        <Link
-          href="/admin"
-          className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-stage-edge
-                     bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-slate-300
-                     transition hover:bg-white/10"
-        >
-          ⚙️ หลังบ้าน — แก้คำถาม กติกา และ API
-        </Link>
+        {/* ลิงก์หลังบ้านถอดออกจากหน้าแรกแล้ว — เข้าที่ /admin ตรงๆ เท่านั้น */}
       </header>
 
       {/* เลือกโหมด */}
