@@ -111,6 +111,15 @@ export interface AdminConfigResponse {
   misspelledEnv: string[];
   /** ชื่อ env ที่ต่างแค่ตัวพิมพ์ — ระบบอ่านให้แล้ว แต่ควรตั้งให้ตรง */
   wrongCaseEnv: Array<{ found: string; expected: string }>;
+  /** ข้อมูล deployment ที่กำลังรัน ใช้เทียบกับหน้า Vercel เวลาตั้งค่าแล้วไม่ขึ้น */
+  deployment: {
+    /** production | preview | development — env ที่ตั้งไว้คนละช่องกับอันนี้จะไม่ถูกอ่าน */
+    vercelEnv: string | null;
+    commitSha: string | null;
+    branch: string | null;
+    /** จำนวน env ทั้งหมดที่ runtime มองเห็น ใช้ดูว่า env ถูกใส่มาจริงไหม */
+    envCount: number;
+  };
   /** ค่าตั้งต้นฝั่งเซิร์ฟเวอร์ ใช้เมื่อหลังบ้านยังไม่ได้เลือกอะไร */
   serverProvider: LlmProvider;
   serverModel: string;
@@ -154,6 +163,13 @@ export async function GET(request: NextRequest) {
     providers: buildStatus(),
     misspelledEnv: envNames.misspelled,
     wrongCaseEnv: envNames.wrongCase,
+    deployment: {
+      // ตัวแปรระบบของ Vercel ไม่ใช่ความลับ เอามาโชว์ได้
+      vercelEnv: process.env.VERCEL_ENV ?? null,
+      commitSha: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+      branch: process.env.VERCEL_GIT_COMMIT_REF ?? null,
+      envCount: Object.keys(process.env).length,
+    },
     serverProvider: fromEnv.provider,
     serverModel: fromEnv.model,
     ollamaBaseUrl: ollamaBaseUrl(),

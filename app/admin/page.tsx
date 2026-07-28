@@ -995,8 +995,18 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               </span>
             </Row>
             <Row label="สภาพแวดล้อม">
-              <span className="text-slate-300">{cfg.environment}</span>
+              <span className="text-slate-300">
+                {cfg.environment}
+                {cfg.deployment.vercelEnv ? ` · Vercel: ${cfg.deployment.vercelEnv}` : ""}
+              </span>
             </Row>
+            {cfg.deployment.commitSha ? (
+              <Row label="โค้ดที่รันอยู่">
+                <span className="font-mono text-slate-300">
+                  {cfg.deployment.branch}@{cfg.deployment.commitSha}
+                </span>
+              </Row>
+            ) : null}
           </dl>
         ) : null}
 
