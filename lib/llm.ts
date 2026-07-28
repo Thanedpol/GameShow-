@@ -614,12 +614,17 @@ class HttpError extends Error {
  * ทุกเจ้าห่อไว้คนละชั้น เช่น Google ใช้ { error: { message } } ส่วน OpenAI ใช้ { error: { message } }
  * ถ้าแกะไม่ได้ค่อยคืน body ดิบแบบตัดสั้น
  */
+interface ApiErrorBody {
+  error?: { message?: string } | string;
+  message?: string;
+}
+
 function extractApiMessage(text: string): string {
   try {
-    const body = JSON.parse(text) as {
-      error?: { message?: string } | string;
-      message?: string;
-    };
+    const parsed = JSON.parse(text) as ApiErrorBody | ApiErrorBody[];
+    // Gemini ห่อ error ของ chat/completions มาใน array ส่วน endpoint อื่นส่งเป็น object เดี่ยว
+    const body = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!body) return text.slice(0, 200);
     if (typeof body.error === "string") return body.error;
     if (body.error?.message) return body.error.message;
     if (body.message) return body.message;
