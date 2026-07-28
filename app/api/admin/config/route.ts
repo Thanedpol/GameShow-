@@ -57,8 +57,40 @@ export interface ProviderStatus {
   note: string;
 }
 
+/**
+ * ชื่อ env ที่ "ดูเหมือนตั้งใจจะเป็นคีย์ของเรา" แต่สะกดไม่ตรง
+ *
+ * มีไว้จับเคสที่เจอบ่อยตอนตั้งค่าบน Vercel — พิมพ์ชื่อผิด มีช่องว่างต่อท้าย
+ * หรือใช้ชื่อคนละแบบ แสดงเฉพาะ "ชื่อ" ไม่เคยแสดงค่า
+ */
+const EXPECTED_ENV = new Set([
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "OLLAMA_BASE_URL",
+  "LLM_PROVIDER",
+  "HINT_MODEL",
+  "REVEAL_SECRET",
+  "ADMIN_PASSWORD",
+  "UPSTASH_REDIS_REST_URL",
+  "UPSTASH_REDIS_REST_TOKEN",
+  "KV_REST_API_URL",
+  "KV_REST_API_TOKEN",
+]);
+
+const LOOKS_LIKE_OURS = /GEMINI|OPENAI|ANTHROPIC|OPENROUTER|OLLAMA|API_KEY|LLM_|HINT_MODEL/i;
+
+function misspelledEnvNames(): string[] {
+  return Object.keys(process.env)
+    .filter((name) => LOOKS_LIKE_OURS.test(name) && !EXPECTED_ENV.has(name))
+    .slice(0, 20);
+}
+
 export interface AdminConfigResponse {
   providers: ProviderStatus[];
+  /** ชื่อ env ที่คล้ายของเราแต่สะกดไม่ตรง — ว่างเปล่าคือไม่มีปัญหาชื่อ */
+  misspelledEnv: string[];
   /** ค่าตั้งต้นฝั่งเซิร์ฟเวอร์ ใช้เมื่อหลังบ้านยังไม่ได้เลือกอะไร */
   serverProvider: LlmProvider;
   serverModel: string;
@@ -99,6 +131,7 @@ export async function GET(request: NextRequest) {
   const fromEnv = envChoice();
   const payload: AdminConfigResponse = {
     providers: buildStatus(),
+    misspelledEnv: misspelledEnvNames(),
     serverProvider: fromEnv.provider,
     serverModel: fromEnv.model,
     ollamaBaseUrl: ollamaBaseUrl(),

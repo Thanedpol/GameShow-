@@ -998,6 +998,18 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               <span className="text-slate-300">{cfg.environment}</span>
             </Row>
           </dl>
+        ) : null}
+
+        {cfg?.misspelledEnv.length ? (
+          <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+            ⚠️ เจอตัวแปรที่ชื่อคล้ายของเราแต่สะกดไม่ตรง:{" "}
+            <b className="font-mono">{cfg.misspelledEnv.join(", ")}</b>{" "}
+            — น่าจะพิมพ์ชื่อผิดหรือมีช่องว่างติดมา ลองตั้งใหม่ให้ตรงเป๊ะ
+          </p>
+        ) : null}
+
+        {cfg ? (
+          <span />
         ) : (
           <p className="text-xs text-slate-400">กำลังโหลด...</p>
         )}
