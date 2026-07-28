@@ -16,7 +16,8 @@ npm install
 cp .env.local.example .env.local
 ```
 
-ใส่ `ANTHROPIC_API_KEY` ลงใน `.env.local` แล้วรัน:
+ใส่คีย์ของเจ้าที่จะใช้ลงใน `.env.local` (`ANTHROPIC_API_KEY` หรือ `OPENROUTER_API_KEY`
+ส่วน Ollama ไม่ต้องใช้คีย์) แล้วรัน:
 
 ```bash
 npm run dev
@@ -26,7 +27,7 @@ npm run dev
 
 ### ไม่มี API key ก็เล่นได้
 
-ถ้ายังไม่ได้ตั้ง `ANTHROPIC_API_KEY` เกมจะสลับไป **โหมดสำรอง** อัตโนมัติ —
+ถ้ายังไม่ได้ตั้งคีย์ (หรือเรียกโมเดลไม่สำเร็จ) เกมจะสลับไป **โหมดสำรอง** อัตโนมัติ —
 สร้างคำใบ้และตรวจคำตอบอัตนัยด้วยสูตรในเครื่อง (มีป้าย "โหมดสำรอง" กำกับใน UI)
 กลไกทั้งหมดยังทำงานครบ เหมาะกับการเดโมโดยไม่เสียโทเคน
 
@@ -44,8 +45,11 @@ HINT_MODEL=claude-haiku-4-5
 
 | ตัวแปร | จำเป็น | ใช้ทำอะไร |
 | --- | --- | --- |
+| `LLM_PROVIDER` | ไม่ | `anthropic` (ดีฟอลต์) / `openrouter` / `ollama` — เป็นแค่ค่าตั้งต้น หลังบ้านเลือกทับได้ |
 | `ANTHROPIC_API_KEY` | ไม่ (แต่ควรมี) | สร้างคำใบ้ ตรวจอัตนัย และสรุปผล ไม่มีก็ใช้โหมดสำรอง |
-| `HINT_MODEL` | ไม่ | โมเดลที่ใช้ ดีฟอลต์ `claude-opus-5` |
+| `OPENROUTER_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `openrouter` |
+| `OLLAMA_BASE_URL` | ไม่ | ดีฟอลต์ `http://127.0.0.1:11434` — บน Vercel เรียก localhost ไม่ได้ |
+| `HINT_MODEL` | ไม่ | โมเดลตั้งต้น ต้องเป็นชื่อของ provider ที่ตั้งไว้ ดีฟอลต์ `claude-opus-5` |
 | `REVEAL_SECRET` | ไม่ | คีย์เข้ารหัส label จริง/หลอก ไม่ตั้งจะ derive จาก API key |
 | `ADMIN_PASSWORD` | ไม่ | ถ้าตั้ง หน้า `/admin` แท็บ API จะต้องใส่รหัสก่อนแก้ |
 
@@ -56,7 +60,8 @@ HINT_MODEL=claude-haiku-4-5
 - **Next.js 15** (App Router) + **TypeScript** + **Tailwind CSS 3**
 - **ไม่มีฐานข้อมูล** — state เกมอยู่ใน React Context + `useReducer`
   ส่วนค่าที่ตั้งจากหลังบ้านอยู่ใน `localStorage`
-- **Anthropic SDK** เรียกจาก API Route เท่านั้น — API key ไม่หลุดไปฝั่ง client
+- **เรียก LLM จาก API Route เท่านั้น** — คีย์ไม่หลุดไปฝั่ง client
+  รองรับ 3 เจ้าผ่าน `lib/llm.ts` (Anthropic SDK / OpenRouter / Ollama)
 
 ```
 app/
@@ -64,15 +69,16 @@ app/
   admin/page.tsx          หลังบ้าน 3 แท็บ (คำถาม / กติกา / API)
   api/hint/route.ts       POST สร้างกล่องคำใบ้ (คืน revealToken)
   api/reveal/route.ts     POST ถอด revealToken เป็นเฉลย จริง/หลอก + เหตุผล
-  api/grade/route.ts      POST ให้ Claude ตรวจคำตอบอัตนัยตาม rubric
+  api/grade/route.ts      POST ให้โมเดลตรวจคำตอบอัตนัยตาม rubric
   api/debrief/route.ts    POST สรุปว่ากล่องแต่ละกล่องออกแบบแบบนั้นเพราะอะไร
   api/admin/config/route.ts  GET สถานะคีย์ · POST เขียน .env.local · PUT ทดสอบเชื่อมต่อ
+  api/admin/models/route.ts  GET รายชื่อโมเดลจริงของ provider ที่ระบุ
 components/
   SetupScreen · QuestionScreen · DebriefScreen · ScoreBoard · TimerRing · SafetyBanner
 lib/
   types · questions (คลังตั้งต้น 20 ข้อ พร้อมคำใบ้เขียนไว้ในตัวข้อ) · scoring (สูตรคะแนน)
   settings (ค่าจากหลังบ้าน + sanitizer) · gameStore (reducer)
-  hintEngine (Claude + เข้ารหัส label) · bot · useCountdown
+  llm (ชั้นกลางคุยกับ LLM ทุกเจ้า) · hintEngine (prompt + เข้ารหัส label) · bot · useCountdown
 ```
 
 ---
@@ -93,7 +99,8 @@ POST /api/reveal  { revealToken }
 
 ออกแบบเป็น **stateless** เพราะ serverless แต่ละ request อาจไปคนละ instance
 ถ้าเก็บ label ไว้ใน memory ตอนเฉลยจะหาไม่เจอแบบสุ่ม ๆ
-คีย์มาจาก `REVEAL_SECRET` ถ้าตั้งไว้ ไม่งั้น derive จาก `ANTHROPIC_API_KEY` ด้วย HKDF-SHA256
+คีย์มาจาก `REVEAL_SECRET` ถ้าตั้งไว้ ไม่งั้น derive จาก `ANTHROPIC_API_KEY`
+(หรือ `OPENROUTER_API_KEY` ถ้าไม่มีตัวแรก) ด้วย HKDF-SHA256
 
 **พารามิเตอร์ `question`** มีไว้รองรับคำถามที่เพิ่ม/แก้จากหลังบ้าน ซึ่งอยู่ใน
 localStorage ของเบราว์เซอร์และเซิร์ฟเวอร์ไม่รู้จัก — เซิร์ฟเวอร์จะใช้คลังตั้งต้นก่อนเสมอ
@@ -128,6 +135,7 @@ localStorage ของเบราว์เซอร์และเซิร์�
 | --- | --- | --- |
 | คำถาม | `localStorage` คีย์ `baijing.questions.v1` | ย้ายเครื่องด้วย Export/Import JSON |
 | กติกา | `localStorage` คีย์ `baijing.settings.v1` | อ่านตอนกด "เริ่มเกม" แล้วล็อกไว้ในสเตต |
+| API — เลือก provider/โมเดล | `localStorage` คีย์ `baijing.llm.v1` | ไม่ใช่ความลับ จึงเปลี่ยนได้แม้บน production |
 
 `GameSettings` แยกค่ารายช่วง (`Record<Stage, number>`) สามตัว — `seconds`,
 `maxOpenBoxes`, `points`, `counts` — ส่วน `boxCount` / `boxCostRatio` / `maxTokens`
@@ -137,10 +145,29 @@ final 4 ข้อ/20 วิ/2 กล่อง `normalizeSettings()` clamp `maxOp
 
 **ข้อจำกัดที่ตั้งใจของแท็บ API**
 
+- แท็บนี้แยกของสองอย่างออกจากกันชัดเจน:
+  **คีย์** อยู่ฝั่งเซิร์ฟเวอร์ (env) เท่านั้น · **การเลือก provider/โมเดล** อยู่ใน localStorage
+  แล้วแนบไปกับ request ตอนเล่น (`llm: { provider, model }`) เพราะไม่ใช่ความลับ
+  ผลคือบน production ยังสลับเจ้า/โมเดลได้ ทั้งที่แก้คีย์ไม่ได้
+- เซิร์ฟเวอร์ตรวจซ้ำเสมอ — provider ต้องอยู่ใน allowlist และชื่อโมเดลต้องผ่าน
+  `/^[\w.:\/-]{1,120}$/` (`resolveLlm()` ใน `lib/llm.ts`) จึงยัดค่ามั่วจาก client ไม่ได้
 - เขียน `.env.local` ได้เฉพาะตอนรัน dev — บน production ระบบไฟล์เป็น read-only
   และการเปิดให้เขียน env ผ่านเว็บสาธารณะคือช่องโหว่ หน้าเว็บจะแจ้งให้ไปตั้งที่ Vercel แทน
 - บันทึกแล้วต้อง **รีสตาร์ท dev server** เพราะ Next.js อ่าน `.env.local` ตอนบูตเท่านั้น
 - ตั้ง `ADMIN_PASSWORD` เพื่อบังคับรหัสผ่านก่อนแก้/ดูสถานะ
+
+**เพิ่มผู้ให้บริการใหม่** แก้ที่ `lib/llm.ts` จุดเดียว — เติมใน `LLM_PROVIDERS`,
+`PROVIDER_LABEL`, `DEFAULT_MODEL` แล้วเขียนฟังก์ชัน `call*Json` / `list*Models` ของเจ้านั้น
+ส่วน `hintEngine` กับ API route ไม่ต้องแตะ เพราะคุยผ่าน `callLlmJson()` อย่างเดียว
+
+| เจ้า | โครงสร้างที่ใช้ | โมเดลตั้งต้น |
+| --- | --- | --- |
+| `anthropic` | Anthropic SDK + `output_config.json_schema` | `claude-opus-5` |
+| `openrouter` | `POST /api/v1/chat/completions` (รูปแบบ OpenAI) | `anthropic/claude-sonnet-4.5` |
+| `ollama` | `POST /api/chat` + ฟิลด์ `format` เป็น JSON Schema | `llama3.1` |
+
+OpenRouter ส่ง `response_format: json_schema` ไปก่อน ถ้าโมเดลนั้นไม่รองรับแล้วตอบ 4xx
+จะลองใหม่แบบไม่บังคับสคีมา แล้วอาศัยสคีมาที่ฝังไว้ใน system prompt + `parseJsonLoose()` แทน
 
 ---
 
@@ -155,14 +182,19 @@ branch อื่น/PR = Preview, ส่วน Development คือ `vercel dev
 
 | Environment | ตั้งอะไร |
 | --- | --- |
-| **Production** | `ANTHROPIC_API_KEY` คีย์จริง |
-| **Preview** | คีย์แยกอีกใบ + `HINT_MODEL=claude-haiku-4-5` |
+| **Production** | คีย์จริงของเจ้าที่จะใช้ (`ANTHROPIC_API_KEY` และ/หรือ `OPENROUTER_API_KEY`) |
+| **Preview** | คีย์แยกอีกใบ + `HINT_MODEL=claude-haiku-4-5-20251001` |
 | **Development** | ไม่ต้องใส่ใน Vercel — ใช้ `.env.local` พอ |
+
+ใส่คีย์ได้ทั้งสองเจ้าพร้อมกัน แล้วสลับไปมาจากหลังบ้านโดยไม่ต้อง redeploy
+ส่วน **Ollama ใช้บน Vercel ไม่ได้** เพราะเซิร์ฟเวอร์ของ Vercel เรียก `localhost`
+ของเครื่องคุณไม่ถึง — จะใช้ต้องรันในเครื่อง หรือเปิด Ollama ออกอินเทอร์เน็ตแล้วตั้ง
+`OLLAMA_BASE_URL` เป็น URL นั้น (ซึ่งต้องมีการป้องกันเอง)
 
 **ควรแยกคีย์ Preview** เพราะ API route ไม่มี auth และควรเปิด
 **Settings → Deployment Protection → Vercel Authentication** ให้ Preview ด้วย
 
-> `maxDuration = 60` ตั้งไว้แล้วในทุก route ที่เรียก Claude
+> `maxDuration = 60` ตั้งไว้แล้วในทุก route ที่เรียกโมเดล
 > เพราะดีฟอลต์ 10 วินาทีของ Vercel ไม่พอ
 
 ---

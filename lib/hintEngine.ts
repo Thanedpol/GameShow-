@@ -7,20 +7,16 @@ import {
   randomBytes,
   randomUUID,
 } from "node:crypto";
-import Anthropic from "@anthropic-ai/sdk";
 import { HINT_BOX_COUNT } from "./scoring";
+import {
+  callLlmJson,
+  envChoice,
+  isProviderReady,
+  resolveLlm,
+  type LlmChoice,
+  type LlmChoiceInput,
+} from "./llm";
 import type { HintTruth, Question, RevealedHintBox } from "./types";
-
-export const HINT_MODEL = process.env.HINT_MODEL?.trim() || "claude-opus-5";
-
-let cachedClient: Anthropic | null = null;
-
-export function getAnthropic(): Anthropic | null {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) return null;
-  if (!cachedClient) cachedClient = new Anthropic({ apiKey, maxRetries: 1 });
-  return cachedClient;
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Reveal token — เก็บ label "จริง/หลอก" แบบ stateless (ใช้ได้บน serverless)
@@ -43,12 +39,14 @@ let warnedAboutDevKey = false;
 function getRevealKey(): Buffer {
   if (cachedKey) return cachedKey;
   const explicit = process.env.REVEAL_SECRET?.trim();
-  const fallback = process.env.ANTHROPIC_API_KEY?.trim();
+  // ไล่ตามลำดับนี้เพื่อไม่ให้ token ที่ออกไปแล้วพัง ตอนมีแค่คีย์ Anthropic เหมือนเดิม
+  const fallback =
+    process.env.ANTHROPIC_API_KEY?.trim() || process.env.OPENROUTER_API_KEY?.trim();
   const material = explicit || fallback || DEV_KEY_MATERIAL;
 
   if (!explicit && !fallback && !warnedAboutDevKey) {
     warnedAboutDevKey = true;
-    console.warn("[reveal] ไม่พบ REVEAL_SECRET/ANTHROPIC_API_KEY — ใช้คีย์ dev ชั่วคราว");
+    console.warn("[reveal] ไม่พบ REVEAL_SECRET และคีย์ผู้ให้บริการ — ใช้คีย์ dev ชั่วคราว");
   }
   cachedKey = Buffer.from(
     hkdfSync("sha256", material, "baijing-reveal-salt-v1", "reveal-token", 32),
@@ -220,80 +218,9 @@ const HINT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-// ────────────────────────────────────────────────────────────────────────────
-// Claude helpers
-// ────────────────────────────────────────────────────────────────────────────
-
-function extractText(message: Anthropic.Message): string {
-  return message.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("")
-    .trim();
-}
-
-export function parseJsonLoose<T>(raw: string): T | null {
-  if (!raw) return null;
-  const cleaned = raw
-    .replace(/^\s*```(?:json)?/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start === -1 || end <= start) return null;
-    try {
-      return JSON.parse(cleaned.slice(start, end + 1)) as T;
-    } catch {
-      return null;
-    }
-  }
-}
-
 interface HintPayload {
   hint: string;
   rationale: string;
-}
-
-async function callClaudeJson<T>(
-  system: string,
-  userPrompt: string,
-  schema: Record<string, unknown>,
-  maxTokens: number,
-  tag: string,
-): Promise<T | null> {
-  const client = getAnthropic();
-  if (!client) return null;
-  try {
-    const message = await client.messages.create(
-      {
-        model: HINT_MODEL,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: "user", content: userPrompt }],
-        output_config: { effort: "low", format: { type: "json_schema", schema } },
-      },
-      { timeout: 40_000 },
-    );
-    if (message.stop_reason === "refusal") {
-      console.warn(`[${tag}] Claude ปฏิเสธคำขอ:`, message.stop_details);
-      return null;
-    }
-    if (message.stop_reason === "max_tokens") {
-      console.warn(`[${tag}] คำตอบถูกตัดกลางคัน (max_tokens)`);
-      return null;
-    }
-    return parseJsonLoose<T>(extractText(message));
-  } catch (error) {
-    if (error instanceof Anthropic.APIError) {
-      console.error(`[${tag}] Anthropic API error ${error.status}:`, error.message);
-    } else {
-      console.error(`[${tag}] เรียก Claude ไม่สำเร็จ:`, error);
-    }
-    return null;
-  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -355,14 +282,18 @@ const BOX_LABELS = ["A", "B", "C", "D"];
 
 export interface HintBoxResult {
   boxes: RevealedHintBox[];
-  source: "claude" | "fallback";
+  source: "llm" | "fallback";
 }
 
 /**
  * สร้าง 4 กล่อง โดยบังคับให้มีทั้งจริงและหลอกอย่างน้อยอย่างละ 1
  * (สัดส่วนสุ่มเป็น 1:3, 2:2 หรือ 3:1) แล้วสลับตำแหน่งก่อนติดป้าย A-D
  */
-export async function generateHintBoxes(question: Question): Promise<HintBoxResult> {
+export async function generateHintBoxes(
+  question: Question,
+  llm?: LlmChoiceInput | null,
+): Promise<HintBoxResult> {
+  const choice = resolveLlm(llm);
   const trueCount = 1 + Math.floor(Math.random() * (HINT_BOX_COUNT - 1)); // 1..3
   const plan: HintTruth[] = [
     ...Array<HintTruth>(trueCount).fill("จริง"),
@@ -375,13 +306,15 @@ export async function generateHintBoxes(question: Question): Promise<HintBoxResu
       truth === "หลอก"
         ? DECEPTIVE_ANGLES[deceptiveIndex++ % DECEPTIVE_ANGLES.length]
         : undefined;
-    const payload = await callClaudeJson<HintPayload>(
-      truth === "จริง" ? DIRECT_SYSTEM : DECEPTIVE_SYSTEM,
-      buildHintPrompt(question, angle, truth),
-      HINT_SCHEMA,
-      6000,
-      "hint",
-    );
+    const payload = isProviderReady(choice.provider)
+      ? await callLlmJson<HintPayload>(choice, {
+          system: truth === "จริง" ? DIRECT_SYSTEM : DECEPTIVE_SYSTEM,
+          prompt: buildHintPrompt(question, angle, truth),
+          schema: HINT_SCHEMA as unknown as Record<string, unknown>,
+          maxTokens: 6000,
+          tag: "hint",
+        })
+      : null;
     return { truth, index, payload: payload?.hint ? payload : null };
   });
 
@@ -410,7 +343,7 @@ export async function generateHintBoxes(question: Question): Promise<HintBoxResu
     box.label = BOX_LABELS[i] ?? String(i + 1);
   });
 
-  return { boxes, source: usedFallback ? "fallback" : "claude" };
+  return { boxes, source: usedFallback ? "fallback" : "llm" };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -454,7 +387,7 @@ export interface GradeResult {
   feedback: string;
   strengths: string[];
   improvements: string[];
-  source: "claude" | "fallback";
+  source: "llm" | "fallback";
 }
 
 /** ตรวจแบบหยาบ ๆ ตอนไม่มี API key — นับว่าแตะประเด็นสำคัญกี่ข้อ */
@@ -481,7 +414,7 @@ function fallbackGrade(question: Question, answer: string): GradeResult {
   return {
     score,
     feedback:
-      `โหมดสำรอง (ไม่มี ANTHROPIC_API_KEY) — ประเมินหยาบ ๆ จากการแตะประเด็นสำคัญ ` +
+      `โหมดสำรอง (ยังต่อโมเดลไม่ได้) — ประเมินหยาบ ๆ จากการแตะประเด็นสำคัญ ` +
       `${hit.length}/${points.length} ข้อ`,
     strengths: hit.map((p) => `พูดถึง: ${p}`),
     improvements: points.filter((p) => !hit.includes(p)).map((p) => `ยังไม่ได้พูดถึง: ${p}`),
@@ -492,6 +425,7 @@ function fallbackGrade(question: Question, answer: string): GradeResult {
 export async function gradeOpenAnswer(
   question: Question,
   answer: string,
+  llm?: LlmChoiceInput | null,
 ): Promise<GradeResult> {
   if (!answer.trim()) {
     return {
@@ -519,12 +453,21 @@ export async function gradeOpenAnswer(
     .filter(Boolean)
     .join("\n");
 
-  const parsed = await callClaudeJson<{
-    score?: number;
-    feedback?: string;
-    strengths?: string[];
-    improvements?: string[];
-  }>(GRADE_SYSTEM, userPrompt, GRADE_SCHEMA, 6000, "grade");
+  const choice = resolveLlm(llm);
+  const parsed = isProviderReady(choice.provider)
+    ? await callLlmJson<{
+        score?: number;
+        feedback?: string;
+        strengths?: string[];
+        improvements?: string[];
+      }>(choice, {
+        system: GRADE_SYSTEM,
+        prompt: userPrompt,
+        schema: GRADE_SCHEMA as unknown as Record<string, unknown>,
+        maxTokens: 6000,
+        tag: "grade",
+      })
+    : null;
 
   if (!parsed || typeof parsed.score !== "number") {
     return fallbackGrade(question, answer);
@@ -537,6 +480,11 @@ export async function gradeOpenAnswer(
     improvements: Array.isArray(parsed.improvements)
       ? parsed.improvements.slice(0, 3)
       : [],
-    source: "claude",
+    source: "llm",
   };
+}
+
+/** ใช้ในหน้าหลังบ้าน — บอกว่าค่าตั้งต้นฝั่งเซิร์ฟเวอร์ตอนนี้คือเจ้าไหน โมเดลอะไร */
+export function serverDefaultChoice(): LlmChoice {
+  return envChoice();
 }

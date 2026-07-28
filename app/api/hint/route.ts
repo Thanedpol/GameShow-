@@ -47,7 +47,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await generateHintBoxes(question);
+    // provider/model ที่หลังบ้านเลือกไว้ — เซิร์ฟเวอร์ตรวจ allowlist เองอีกชั้นใน resolveLlm
+    const result = await generateHintBoxes(question, body.llm);
     const payload: HintApiResponse = {
       revealToken: sealReveal(question.id, result.boxes),
       // ตัด truth / rationale ออกก่อนส่งให้ client

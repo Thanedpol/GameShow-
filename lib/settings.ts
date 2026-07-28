@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
 
 const SETTINGS_KEY = "baijing.settings.v1";
 const QUESTIONS_KEY = "baijing.questions.v1";
+const LLM_KEY = "baijing.llm.v1";
 
 const isBrowser = () => typeof window !== "undefined";
 
@@ -94,6 +95,78 @@ export function saveSettings(settings: GameSettings): void {
 export function resetSettings(): void {
   if (!isBrowser()) return;
   window.localStorage.removeItem(SETTINGS_KEY);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ผู้ให้บริการ LLM + โมเดล ที่เลือกจากหลังบ้าน
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * เก็บแยกจาก GameSettings เพราะไม่ได้ล็อกตอนเริ่มเกมเหมือนกติกา
+ * และไม่มีความลับอยู่ในนี้ — ตัวคีย์ API อยู่ฝั่งเซิร์ฟเวอร์ (env) เสมอ
+ *
+ * "auto" = ใช้ค่าที่ตั้งไว้ใน env ของเซิร์ฟเวอร์ (LLM_PROVIDER / HINT_MODEL)
+ */
+export type LlmProviderChoice = "auto" | "anthropic" | "openrouter" | "ollama";
+
+export interface LlmSettings {
+  provider: LlmProviderChoice;
+  /** เว้นว่าง = ให้เซิร์ฟเวอร์เลือกโมเดลตั้งต้นของเจ้านั้นเอง */
+  model: string;
+}
+
+export const DEFAULT_LLM_SETTINGS: LlmSettings = { provider: "auto", model: "" };
+
+const PROVIDER_CHOICES: LlmProviderChoice[] = [
+  "auto",
+  "anthropic",
+  "openrouter",
+  "ollama",
+];
+
+/** ชื่อโมเดลใช้ได้แค่ตัวอักษร ตัวเลข และ . _ - / : (ตรงกับที่เซิร์ฟเวอร์ตรวจซ้ำอีกชั้น) */
+const MODEL_PATTERN = /^[\w.:\/-]{1,120}$/;
+
+export function normalizeLlmSettings(raw: Partial<LlmSettings> | null): LlmSettings {
+  if (!raw) return { ...DEFAULT_LLM_SETTINGS };
+  const provider = PROVIDER_CHOICES.includes(raw.provider as LlmProviderChoice)
+    ? (raw.provider as LlmProviderChoice)
+    : "auto";
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  return { provider, model: MODEL_PATTERN.test(model) ? model : "" };
+}
+
+export function loadLlmSettings(): LlmSettings {
+  if (!isBrowser()) return { ...DEFAULT_LLM_SETTINGS };
+  try {
+    const raw = window.localStorage.getItem(LLM_KEY);
+    return normalizeLlmSettings(raw ? (JSON.parse(raw) as Partial<LlmSettings>) : null);
+  } catch {
+    return { ...DEFAULT_LLM_SETTINGS };
+  }
+}
+
+export function saveLlmSettings(settings: LlmSettings): void {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(LLM_KEY, JSON.stringify(normalizeLlmSettings(settings)));
+}
+
+export function resetLlmSettings(): void {
+  if (!isBrowser()) return;
+  window.localStorage.removeItem(LLM_KEY);
+}
+
+/**
+ * แปลงเป็นก้อนที่แนบไปกับ /api/hint, /api/grade, /api/debrief
+ * คืน undefined เมื่อยังเป็น "auto" ทั้งหมด เพื่อให้เซิร์ฟเวอร์ใช้ค่า env ตามเดิม
+ */
+export function llmRequestPayload(): { provider?: string; model?: string } | undefined {
+  const { provider, model } = loadLlmSettings();
+  if (provider === "auto" && !model) return undefined;
+  return {
+    provider: provider === "auto" ? undefined : provider,
+    model: model || undefined,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────

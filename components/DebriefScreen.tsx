@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useGame } from "@/lib/gameStore";
 import { MODE_LABEL, STAGE_LABEL, nameOfId, rankParticipants, winnersOf } from "@/lib/scoring";
+import { llmRequestPayload } from "@/lib/settings";
 import type { DebriefApiResponse } from "@/lib/types";
 
 const FORMAT_LABEL = {
@@ -28,6 +29,7 @@ export default function DebriefScreen() {
           body: JSON.stringify({
             participants: state.participants.map((p) => ({ name: p.name, score: p.score })),
             hintHistory: state.hintHistory,
+            llm: llmRequestPayload(),
           }),
         });
         if (!res.ok) throw new Error(String(res.status));

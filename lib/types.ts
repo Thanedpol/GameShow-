@@ -95,14 +95,24 @@ export interface RevealedHintBox extends HintBox {
   rationale: string;
 }
 
+/**
+ * ผู้ให้บริการ LLM + โมเดลที่หลังบ้านเลือกไว้
+ * ส่งแนบไปกับทุก request ที่ต้องเรียกโมเดล ตัวคีย์ยังอยู่ฝั่งเซิร์ฟเวอร์เสมอ
+ */
+export interface LlmChoiceInput {
+  provider?: string;
+  model?: string;
+}
+
 export interface HintApiRequest {
   questionId: string;
+  llm?: LlmChoiceInput;
 }
 
 export interface HintApiResponse {
   revealToken: string;
   boxes: HintBox[];
-  source: "claude" | "fallback";
+  source: "llm" | "fallback";
 }
 
 export interface RevealApiRequest {
@@ -121,6 +131,7 @@ export interface RevealApiResponse {
 export interface GradeApiRequest {
   questionId: string;
   answer: string;
+  llm?: LlmChoiceInput;
 }
 
 export interface GradeApiResponse {
@@ -129,7 +140,7 @@ export interface GradeApiResponse {
   feedback: string;
   strengths: string[];
   improvements: string[];
-  source: "claude" | "fallback";
+  source: "llm" | "fallback";
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -191,6 +202,7 @@ export interface GameState {
 export interface DebriefApiRequest {
   participants: Array<{ name: string; score: number }>;
   hintHistory: HintUsage[];
+  llm?: LlmChoiceInput;
 }
 
 export interface DebriefNote {
@@ -206,5 +218,5 @@ export interface DebriefNote {
 export interface DebriefApiResponse {
   overall: string;
   notes: DebriefNote[];
-  source: "claude" | "fallback";
+  source: "llm" | "fallback";
 }

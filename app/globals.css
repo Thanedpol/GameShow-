@@ -74,6 +74,12 @@
            focus:border-sky-400 focus:bg-white/[0.07];
   }
 
+  /* ตัวเลือกในดรอปดาวน์วาดโดยเบราว์เซอร์ พื้นหลังโปร่งของ .field เลยไม่มีผล
+     ต้องกำหนดสีทึบเอง ไม่งั้นบางเครื่องได้ตัวอักษรขาวบนพื้นขาว */
+  select.field option {
+    @apply bg-slate-900 text-slate-100;
+  }
+
   /* กล่องคำใบ้ที่ยังไม่เปิด */
   .hint-box {
     @apply relative flex min-h-[104px] flex-col items-center justify-center gap-1

@@ -12,6 +12,7 @@ import {
   nameOfId,
 } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
+import { llmRequestPayload } from "@/lib/settings";
 import type {
   GradeApiResponse,
   HintApiResponse,
@@ -53,7 +54,7 @@ export default function QuestionScreen() {
   const [phase, setPhase] = useState<Local>("answering");
   const [boxes, setBoxes] = useState<HintBox[] | null>(null);
   const [revealToken, setRevealToken] = useState<string | null>(null);
-  const [hintSource, setHintSource] = useState<"claude" | "fallback">("claude");
+  const [hintSource, setHintSource] = useState<"llm" | "fallback">("llm");
   const [hintFailed, setHintFailed] = useState(false);
   const [openedIds, setOpenedIds] = useState<string[]>([]);
   const [useToken, setUseToken] = useState(false);
@@ -128,7 +129,11 @@ export default function QuestionScreen() {
           headers: { "Content-Type": "application/json" },
           // ส่งตัวข้อไปด้วย เผื่อเป็นคำถามที่แก้/เพิ่มจากหลังบ้าน
           // ซึ่งเซิร์ฟเวอร์ไม่มีอยู่ในคลังตั้งต้น
-          body: JSON.stringify({ questionId: question.id, question }),
+          body: JSON.stringify({
+            questionId: question.id,
+            question,
+            llm: llmRequestPayload(),
+          }),
         });
         if (!res.ok) throw new Error(String(res.status));
         const data = (await res.json()) as HintApiResponse;
@@ -293,7 +298,12 @@ export default function QuestionScreen() {
           const res = await fetch("/api/grade", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ questionId: question.id, question, answer }),
+            body: JSON.stringify({
+              questionId: question.id,
+              question,
+              answer,
+              llm: llmRequestPayload(),
+            }),
           });
           const data = (await res.json()) as GradeApiResponse;
           commit({
@@ -511,7 +521,7 @@ export default function QuestionScreen() {
             </p>
           ) : hintSource === "fallback" && boxes ? (
             <p className="text-[11px] text-cyan-200/70">
-              โหมดสำรอง (ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY)
+              โหมดสำรอง — ยังต่อโมเดลไม่ได้ (เช็กที่หลังบ้าน → แท็บ API)
             </p>
           ) : null}
         </section>

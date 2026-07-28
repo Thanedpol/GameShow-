@@ -4,18 +4,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { QUESTION_BANK } from "@/lib/questions";
 import {
+  DEFAULT_LLM_SETTINGS,
   DEFAULT_SETTINGS,
   isUsingCustomQuestions,
+  loadLlmSettings,
   loadQuestions,
   loadSettings,
+  resetLlmSettings,
   resetQuestions,
   resetSettings,
   sanitizeQuestion,
+  saveLlmSettings,
   saveQuestions,
   saveSettings,
   type GameSettings,
+  type LlmProviderChoice,
+  type LlmSettings,
 } from "@/lib/settings";
 import type { AdminConfigResponse } from "@/app/api/admin/config/route";
+import type { AdminModelsResponse } from "@/app/api/admin/models/route";
 import type { Category, Difficulty, Question, QuestionFormat, Stage } from "@/lib/types";
 
 type Tab = "questions" | "rules" | "api";
@@ -693,11 +700,26 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
 // แท็บ API
 // ════════════════════════════════════════════════════════════════════════════
 
+const PROVIDER_CHOICES: Array<{
+  value: LlmProviderChoice;
+  label: string;
+  hint: string;
+}> = [
+  { value: "auto", label: "ตามค่าเซิร์ฟเวอร์", hint: "ใช้ LLM_PROVIDER ที่ตั้งไว้ใน env" },
+  { value: "anthropic", label: "Anthropic", hint: "Claude โดยตรง — คุณภาพคำใบ้ดีที่สุด" },
+  { value: "openrouter", label: "OpenRouter", hint: "คีย์เดียว เลือกได้หลายร้อยโมเดล" },
+  { value: "ollama", label: "Ollama", hint: "รันในเครื่องตัวเอง ฟรี ไม่ต้องมีคีย์" },
+];
+
 function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [cfg, setCfg] = useState<AdminConfigResponse | null>(null);
   const [password, setPassword] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
+  const [llm, setLlm] = useState<LlmSettings>(DEFAULT_LLM_SETTINGS);
+  const [models, setModels] = useState<AdminModelsResponse["models"]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [openRouterKey, setOpenRouterKey] = useState("");
+  const [ollamaUrl, setOllamaUrl] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(
     null,
@@ -718,19 +740,75 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   };
 
   useEffect(() => {
+    setLlm(loadLlmSettings());
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleSave() {
+  /** เจ้าที่กำลังจะถูกใช้จริง — "auto" ให้ตกไปเป็นค่าของเซิร์ฟเวอร์ */
+  const effectiveProvider =
+    llm.provider === "auto" ? (cfg?.serverProvider ?? "anthropic") : llm.provider;
+  const effectiveModel = llm.model || (cfg && llm.provider === "auto" ? cfg.serverModel : "");
+  const activeStatus = cfg?.providers.find((p) => p.provider === effectiveProvider);
+
+  async function fetchModels() {
+    setLoadingModels(true);
+    try {
+      const res = await fetch(`/api/admin/models?provider=${effectiveProvider}`, { headers });
+      const data = (await res.json()) as AdminModelsResponse | { error?: string };
+      if ("models" in data) {
+        setModels(data.models);
+        onFlash(
+          data.models.length > 0
+            ? `พบ ${data.models.length} โมเดลจาก ${effectiveProvider}`
+            : `ไม่พบโมเดลจาก ${effectiveProvider} — เช็กคีย์หรือพิมพ์ชื่อโมเดลเองได้`,
+        );
+      } else {
+        onFlash(data.error ?? "ดึงรายชื่อโมเดลไม่สำเร็จ");
+      }
+    } catch (e) {
+      onFlash(`ดึงรายชื่อโมเดลไม่สำเร็จ — ${String(e)}`);
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  function handleProvider(value: LlmProviderChoice) {
+    // โมเดลของคนละเจ้าใช้ชื่อคนละแบบ เปลี่ยนเจ้าแล้วต้องล้างโมเดลเดิมทิ้ง
+    setLlm({ provider: value, model: "" });
+    setModels([]);
+  }
+
+  function handleSaveChoice() {
+    saveLlmSettings(llm);
+    onFlash(
+      llm.provider === "auto" && !llm.model
+        ? "กลับไปใช้ค่าตั้งต้นของเซิร์ฟเวอร์แล้ว"
+        : `บันทึกแล้ว — เกมจะใช้ ${effectiveProvider}${llm.model ? ` · ${llm.model}` : ""}`,
+    );
+  }
+
+  function handleResetChoice() {
+    resetLlmSettings();
+    setLlm(DEFAULT_LLM_SETTINGS);
+    setModels([]);
+    onFlash("คืนค่าเป็นตามเซิร์ฟเวอร์แล้ว");
+  }
+
+  async function handleSaveKeys() {
     const res = await fetch("/api/admin/config", {
       method: "POST",
       headers,
-      body: JSON.stringify({ apiKey: apiKey.trim() || undefined, model: model.trim() || undefined }),
+      body: JSON.stringify({
+        anthropicKey: anthropicKey.trim() || undefined,
+        openRouterKey: openRouterKey.trim() || undefined,
+        ollamaBaseUrl: ollamaUrl.trim() || undefined,
+      }),
     });
     const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
     onFlash(data.message ?? data.error ?? "ไม่ทราบผล");
-    setApiKey("");
+    setAnthropicKey("");
+    setOpenRouterKey("");
     await refresh();
   }
 
@@ -738,7 +816,14 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch("/api/admin/config", { method: "PUT", headers });
+      const res = await fetch("/api/admin/config", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          provider: llm.provider === "auto" ? undefined : llm.provider,
+          model: llm.model || undefined,
+        }),
+      });
       setTestResult((await res.json()) as { ok: boolean; message: string });
     } catch (e) {
       setTestResult({ ok: false, message: String(e) });
@@ -747,21 +832,133 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     }
   }
 
+  const keysDirty =
+    Boolean(anthropicKey.trim()) || Boolean(openRouterKey.trim()) || Boolean(ollamaUrl.trim());
+
   return (
     <div className="space-y-4">
+      {/* ── เลือกเจ้า + โมเดล (เก็บในเบราว์เซอร์ ใช้ได้ทั้ง dev และ production) ── */}
+      <section className="panel space-y-3 p-4">
+        <div>
+          <h2 className="text-sm font-bold text-white">ผู้ให้บริการและโมเดล</h2>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            เลือกได้ทันทีแม้อยู่บน production เพราะเก็บไว้ในเบราว์เซอร์เครื่องนี้
+            ส่วนคีย์ยังอยู่ฝั่งเซิร์ฟเวอร์เสมอ
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {PROVIDER_CHOICES.map((p) => {
+            const active = llm.provider === p.value;
+            const status = cfg?.providers.find((s) => s.provider === p.value);
+            return (
+              <button
+                key={p.value}
+                onClick={() => handleProvider(p.value)}
+                className={`rounded-xl border p-3 text-left transition ${
+                  active
+                    ? "border-sky-400/80 bg-sky-500/15 shadow-glow"
+                    : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.06]"
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-white">{p.label}</span>
+                  {status && !status.ready ? (
+                    <span className="text-[10px] text-amber-300">ยังไม่มีคีย์</span>
+                  ) : null}
+                </div>
+                <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{p.hint}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <Field label="โมเดลที่จะใช้">
+          <div className="flex gap-2">
+            <select
+              value={models.some((m) => m.id === llm.model) ? llm.model : ""}
+              onChange={(e) => setLlm({ ...llm, model: e.target.value })}
+              className="field flex-1"
+            >
+              <option value="">
+                {llm.model ? `(พิมพ์เอง) ${llm.model}` : "— ใช้โมเดลตั้งต้นของเจ้านี้ —"}
+              </option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => void fetchModels()}
+              disabled={loadingModels}
+              className="btn-ghost shrink-0 text-xs"
+            >
+              {loadingModels ? "กำลังโหลด..." : "โหลดรายชื่อ"}
+            </button>
+          </div>
+        </Field>
+
+        <Field label="หรือพิมพ์ชื่อโมเดลเอง">
+          <input
+            value={llm.model}
+            onChange={(e) => setLlm({ ...llm, model: e.target.value })}
+            placeholder={
+              effectiveProvider === "anthropic"
+                ? "claude-opus-5"
+                : effectiveProvider === "openrouter"
+                  ? "anthropic/claude-sonnet-4.5"
+                  : "llama3.1"
+            }
+            autoComplete="off"
+            spellCheck={false}
+            className="field"
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={handleSaveChoice} className="btn-primary text-sm">
+            บันทึกการเลือก
+          </button>
+          <button onClick={handleResetChoice} className="btn-ghost text-sm">
+            คืนค่าตามเซิร์ฟเวอร์
+          </button>
+        </div>
+
+        {activeStatus && !activeStatus.ready ? (
+          <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+            ยังไม่ได้ตั้ง {activeStatus.envKey} — เลือกเจ้านี้ไว้ได้ แต่เกมจะตกไปโหมดสำรอง
+            จนกว่าจะใส่คีย์
+          </p>
+        ) : null}
+      </section>
+
+      {/* ── สถานะ + ทดสอบ ── */}
       <section className="panel space-y-3 p-4">
         <h2 className="text-sm font-bold text-white">สถานะการเชื่อมต่อ</h2>
         {cfg ? (
           <dl className="space-y-1.5 text-xs">
-            <Row label="ANTHROPIC_API_KEY">
-              {cfg.hasKey ? (
-                <span className="text-teal-200">ตั้งค่าแล้ว · {cfg.maskedKey}</span>
-              ) : (
-                <span className="text-amber-200">ยังไม่ตั้งค่า (เกมจะใช้โหมดสำรอง)</span>
-              )}
+            {cfg.providers.map((p) => (
+              <Row key={p.provider} label={p.label}>
+                {p.provider === "ollama" ? (
+                  <span className="text-slate-300">{cfg.ollamaBaseUrl}</span>
+                ) : p.ready ? (
+                  <span className="text-teal-200">ตั้งค่าแล้ว · {p.maskedKey}</span>
+                ) : (
+                  <span className="text-amber-200">ยังไม่ตั้ง {p.envKey}</span>
+                )}
+              </Row>
+            ))}
+            <Row label="เกมจะใช้">
+              <span className="text-sky-200">
+                {effectiveProvider}
+                {effectiveModel ? ` · ${effectiveModel}` : " · (โมเดลตั้งต้น)"}
+              </span>
             </Row>
-            <Row label="โมเดลที่ใช้">
-              <span className="text-slate-200">{cfg.model}</span>
+            <Row label="ค่าตั้งต้นเซิร์ฟเวอร์">
+              <span className="text-slate-300">
+                {cfg.serverProvider} · {cfg.serverModel}
+              </span>
             </Row>
             <Row label="REVEAL_SECRET">
               <span className="text-slate-300">
@@ -777,7 +974,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         )}
 
         <button onClick={handleTest} disabled={testing} className="btn-teal w-full text-sm">
-          {testing ? "กำลังทดสอบ..." : "ทดสอบเชื่อมต่อ Claude"}
+          {testing ? "กำลังทดสอบ..." : `ทดสอบเชื่อมต่อ ${effectiveProvider}`}
         </button>
 
         {testResult ? (
@@ -794,8 +991,9 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         ) : null}
       </section>
 
+      {/* ── คีย์ (เขียนลงไฟล์ได้เฉพาะตอน dev) ── */}
       <section className="panel space-y-3 p-4">
-        <h2 className="text-sm font-bold text-white">แก้ไขคีย์และโมเดล</h2>
+        <h2 className="text-sm font-bold text-white">คีย์ API</h2>
 
         {cfg?.passwordRequired ? (
           <Field label="รหัสผ่านหลังบ้าน (ADMIN_PASSWORD)">
@@ -812,27 +1010,39 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         <Field label="ANTHROPIC_API_KEY">
           <input
             type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            value={anthropicKey}
+            onChange={(e) => setAnthropicKey(e.target.value)}
             placeholder="sk-ant-..."
             autoComplete="off"
             className="field"
           />
         </Field>
 
-        <Field label="HINT_MODEL (เว้นว่าง = ไม่เปลี่ยน)">
+        <Field label="OPENROUTER_API_KEY">
           <input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="claude-opus-5 หรือ claude-haiku-4-5"
+            type="password"
+            value={openRouterKey}
+            onChange={(e) => setOpenRouterKey(e.target.value)}
+            placeholder="sk-or-v1-..."
             autoComplete="off"
             className="field"
           />
         </Field>
 
+        <Field label="OLLAMA_BASE_URL (เว้นว่าง = ไม่เปลี่ยน)">
+          <input
+            value={ollamaUrl}
+            onChange={(e) => setOllamaUrl(e.target.value)}
+            placeholder={cfg?.ollamaBaseUrl ?? "http://127.0.0.1:11434"}
+            autoComplete="off"
+            spellCheck={false}
+            className="field"
+          />
+        </Field>
+
         <button
-          onClick={handleSave}
-          disabled={!cfg?.writable || (!apiKey.trim() && !model.trim())}
+          onClick={handleSaveKeys}
+          disabled={!cfg?.writable || !keysDirty}
           className="btn-primary w-full text-sm"
         >
           บันทึกลง .env.local
@@ -842,6 +1052,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
             บน production แก้คีย์ผ่านหน้านี้ไม่ได้ เพราะระบบไฟล์เป็น read-only —
             ให้ไปตั้งที่ Vercel → Settings → Environment Variables แล้ว redeploy
+            (ส่วนการเลือกเจ้า/โมเดลด้านบนยังเปลี่ยนได้ตามปกติ)
           </p>
         ) : (
           <p className="text-[11px] leading-relaxed text-slate-400">

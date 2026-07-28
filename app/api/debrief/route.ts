@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import type Anthropic from "@anthropic-ai/sdk";
 import { getQuestionById } from "@/lib/questions";
-import { HINT_MODEL, getAnthropic, openReveal, parseJsonLoose } from "@/lib/hintEngine";
+import { openReveal } from "@/lib/hintEngine";
+import { callLlmJson, isProviderReady, resolveLlm } from "@/lib/llm";
 import type { DebriefApiRequest, DebriefApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
   const buildResponse = (
     overall: string,
     noteText: (item: EnrichedItem) => string,
-    source: "claude" | "fallback",
+    source: "llm" | "fallback",
   ): DebriefApiResponse => ({
     overall,
     source,
@@ -118,8 +118,8 @@ export async function POST(request: NextRequest) {
     })),
   });
 
-  const client = getAnthropic();
-  if (!client || items.length === 0) {
+  const choice = resolveLlm(body.llm);
+  if (!isProviderReady(choice.provider) || items.length === 0) {
     return NextResponse.json(
       buildResponse(fallbackOverall(body), fallbackNote, "fallback"),
       { headers: { "Cache-Control": "no-store" } },
@@ -146,37 +146,17 @@ export async function POST(request: NextRequest) {
   ].join("\n");
 
   try {
-    const message = await client.messages.create(
-      {
-        model: HINT_MODEL,
-        max_tokens: 16000,
-        system: DEBRIEF_SYSTEM,
-        messages: [{ role: "user", content: userPrompt }],
-        output_config: {
-          effort: "low",
-          format: { type: "json_schema", schema: DEBRIEF_SCHEMA },
-        },
-      },
-      { timeout: 45_000 },
-    );
-
-    if (message.stop_reason === "refusal" || message.stop_reason === "max_tokens") {
-      console.warn(`[/api/debrief] ใช้ข้อความสำรอง (stop_reason=${message.stop_reason})`);
-      return NextResponse.json(
-        buildResponse(fallbackOverall(body), fallbackNote, "fallback"),
-        { headers: { "Cache-Control": "no-store" } },
-      );
-    }
-
-    const raw = message.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-
-    const parsed = parseJsonLoose<{
+    const parsed = await callLlmJson<{
       overall?: string;
       notes?: Array<{ index?: number; text?: string }>;
-    }>(raw);
+    }>(choice, {
+      system: DEBRIEF_SYSTEM,
+      prompt: userPrompt,
+      schema: DEBRIEF_SCHEMA as unknown as Record<string, unknown>,
+      maxTokens: 16000,
+      tag: "/api/debrief",
+      timeoutMs: 45_000,
+    });
 
     if (!parsed?.overall) {
       return NextResponse.json(
@@ -196,7 +176,7 @@ export async function POST(request: NextRequest) {
       buildResponse(
         parsed.overall,
         (item) => byIndex.get(item.index) ?? fallbackNote(item),
-        "claude",
+        "llm",
       ),
       { headers: { "Cache-Control": "no-store" } },
     );
