@@ -15,6 +15,7 @@ import {
 } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
 import { llmRequestPayload } from "@/lib/settings";
+import { useSpeechInput } from "@/lib/useSpeechInput";
 import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
 import type { VoiceCritique } from "@/lib/voiceCoach";
 import type { CritiqueApiResponse } from "@/app/api/critique/route";
@@ -66,6 +67,64 @@ function HintBoxBody({ box, imageUrl }: { box: HintBox; imageUrl?: string }) {
   );
 }
 
+/**
+ * ปุ่มไมค์ข้างช่องพิมพ์คำตอบ — พูดแทนพิมพ์ตอนเวลาไม่พอ
+ *
+ * ข้อความที่ได้จะ "ต่อท้าย" ของเดิม ไม่ทับ เพราะผู้เล่นมักพิมพ์ไปบ้างแล้ว
+ * ค่อยนึกได้ว่าพูดเร็วกว่า ถ้าทับของเดิมจะเสียสิ่งที่พิมพ์ไปฟรี ๆ
+ */
+function MicButton({
+  onAppend,
+  onInterim,
+  disabled,
+}: {
+  onAppend: (text: string) => void;
+  onInterim: (text: string) => void;
+  disabled?: boolean;
+}) {
+  const speech = useSpeechInput({
+    onText: (text, final) => (final ? onAppend(text) : onInterim(text)),
+  });
+
+  if (speech.mode === "none") return null;
+  const busy = speech.state === "listening";
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={() => void (busy ? speech.stop() : speech.start())}
+        disabled={disabled || speech.state === "transcribing"}
+        aria-label={busy ? "หยุดพูด" : "พูดแทนพิมพ์"}
+        className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
+          busy
+            ? "border-rose-400/70 bg-rose-500/20 text-rose-100"
+            : "border-stage-edge bg-white/[0.04] text-slate-200 hover:bg-white/[0.09]"
+        }`}
+      >
+        {busy ? (
+          <>
+            <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
+            หยุดพูด
+          </>
+        ) : speech.state === "transcribing" ? (
+          <>
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-sky-300" />
+            กำลังถอดเสียง...
+          </>
+        ) : (
+          <>🎤 พูดแทนพิมพ์</>
+        )}
+      </button>
+      {speech.error ? (
+        <span className="text-[10px] text-amber-300">{speech.error}</span>
+      ) : busy && speech.mode === "upload" ? (
+        <span className="text-[10px] text-slate-500">พูดจบแล้วกดหยุด เดี๋ยวถอดให้</span>
+      ) : null}
+    </div>
+  );
+}
+
 interface Outcome {
   answer: string | null;
   quality: number;
@@ -97,6 +156,14 @@ export default function QuestionScreen() {
   const [useToken, setUseToken] = useState(false);
   const [choice, setChoice] = useState<string | null>(null);
   const [text, setText] = useState("");
+  /**
+   * ข้อความชั่วคราวระหว่างพูด (โหมด live)
+   *
+   * แยกจาก `text` แทนที่จะเขียนลงช่องพิมพ์ตรง ๆ เพราะช่องพิมพ์เป็น controlled input
+   * ที่ผู้เล่นแก้เองได้ตลอด ถ้าเอาผลระหว่างพูดไปทับจะแย่งเคอร์เซอร์กับที่พิมพ์ค้างไว้
+   * ตรงนี้จึงโชว์เป็นตัวอย่างใต้ช่อง แล้วค่อยต่อท้ายจริงตอนประโยคนั้นนิ่งแล้ว
+   */
+  const [interim, setInterim] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [revealed, setRevealed] = useState<RevealedHintBox[] | null>(null);
   const [stealerId, setStealerId] = useState<string | null>(null);
@@ -145,6 +212,7 @@ export default function QuestionScreen() {
     setUseToken(false);
     setChoice(null);
     setText("");
+    setInterim("");
     setOutcome(null);
     setRevealed(null);
     setStealerId(null);
@@ -475,6 +543,15 @@ export default function QuestionScreen() {
     setPhase("result");
   }
 
+  /** ต่อข้อความที่พูดท้ายของเดิม ไม่ทับ — ผู้เล่นอาจพิมพ์ค้างไว้แล้ว */
+  const appendSpoken = useCallback((spoken: string) => {
+    setInterim("");
+    setText((prev) => {
+      const joined = prev.trim() ? `${prev.trim()} ${spoken.trim()}` : spoken.trim();
+      return joined.slice(0, 1200);
+    });
+  }, []);
+
   function openBox(id: string) {
     if (openedIds.includes(id)) return;
     setOpenedIds((prev) => [...prev, id]);
@@ -730,18 +807,26 @@ export default function QuestionScreen() {
             onChange={(e) => setText(e.target.value)}
             rows={5}
             maxLength={1200}
-            placeholder="พิมพ์คำตอบของคุณ... (AI จะตรวจตามเกณฑ์ของข้อนี้)"
+            placeholder="พิมพ์คำตอบของคุณ... (หรือกดปุ่มไมค์แล้วพูด)"
             className="field min-h-[130px] resize-y leading-relaxed"
           />
+          {interim ? (
+            <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs italic leading-relaxed text-sky-100">
+              🎤 {interim}
+            </p>
+          ) : null}
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-slate-500">{text.length}/1200</span>
-            <button
-              onClick={() => void finish(false)}
-              disabled={!text.trim()}
-              className="btn-primary px-6 py-2.5 text-sm"
-            >
-              ส่งคำตอบ
-            </button>
+            <div className="flex items-center gap-2">
+              <MicButton onAppend={appendSpoken} onInterim={setInterim} />
+              <button
+                onClick={() => void finish(false)}
+                disabled={!text.trim()}
+                className="btn-primary px-6 py-2.5 text-sm"
+              >
+                ส่งคำตอบ
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -778,18 +863,26 @@ export default function QuestionScreen() {
             onChange={(e) => setText(e.target.value)}
             rows={5}
             maxLength={1200}
-            placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป... (AI จะตรวจตามเกณฑ์ของข้อนี้)"
+            placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป... (หรือกดปุ่มไมค์แล้วพูดซ้ำอีกรอบ)"
             className="field min-h-[130px] resize-y leading-relaxed"
           />
+          {interim ? (
+            <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs italic leading-relaxed text-sky-100">
+              🎤 {interim}
+            </p>
+          ) : null}
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-slate-500">{text.length}/1200</span>
-            <button
-              onClick={() => void finish(false)}
-              disabled={!text.trim()}
-              className="btn-teal px-6 py-2.5 text-sm"
-            >
-              จบการแสดง → ส่งให้ตรวจ
-            </button>
+            <div className="flex items-center gap-2">
+              <MicButton onAppend={appendSpoken} onInterim={setInterim} />
+              <button
+                onClick={() => void finish(false)}
+                disabled={!text.trim()}
+                className="btn-teal px-6 py-2.5 text-sm"
+              >
+                จบการแสดง → ส่งให้ตรวจ
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

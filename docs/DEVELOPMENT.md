@@ -79,6 +79,9 @@ app/
   api/admin/config/route.ts  GET สถานะคีย์ · POST เขียน .env.local · PUT ทดสอบเชื่อมต่อ
   api/admin/models/route.ts  POST รายชื่อโมเดลจริงของ provider ที่ระบุ
   api/questions/route.ts     POST แต่งคำถามชุดใหม่จากข่าวจริง
+  api/questions/images/route.ts POST วาดภาพให้โจทย์หาจุดผิด
+  api/critique/route.ts      POST ให้โค้ช AI ฟังคลิปที่ผู้เล่นแสดงแล้วให้ฟีดแบ็ก
+  api/transcribe/route.ts    POST ถอดเสียงพูดเป็นข้อความ (ทางสำรองของปุ่มไมค์)
 components/
   SetupScreen · QuestionScreen · DebriefScreen · ScoreBoard · TimerRing · SafetyBanner
 lib/
