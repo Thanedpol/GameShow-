@@ -16,9 +16,12 @@ import Anthropic from "@anthropic-ai/sdk";
  * callOpenAiCompatJson() ต่างกันแค่ base URL, ชื่อ env ของคีย์ และชื่อพารามิเตอร์ token
  *
  * แบ่งความรับผิดชอบไว้ชัด:
- *   - "คีย์" อยู่ฝั่งเซิร์ฟเวอร์เท่านั้น (env) ไม่เคยผ่าน client
  *   - "เลือกเจ้าไหน/โมเดลอะไร" ส่งมาจากหลังบ้านได้ เพราะไม่ใช่ความลับ
  *     แต่ต้องผ่าน allowlist + regex ก่อนเสมอ กัน client ยัดค่ามั่ว
+ *   - "คีย์" ปกติอยู่ฝั่งเซิร์ฟเวอร์ (env) แต่รับจากหลังบ้านได้ด้วย (BYOK)
+ *     เพราะบน Vercel ระบบไฟล์เป็น read-only จะแก้ .env.local ผ่านเว็บไม่ได้
+ *     คีย์ที่ส่งมาถูกใช้เฉพาะ request นั้น ไม่เคยเขียนลงดิสก์ ไม่เคย log
+ *     และไม่เคยถูกส่งกลับไปฝั่ง client
  */
 
 export type LlmProvider = "anthropic" | "openai" | "gemini" | "openrouter" | "ollama";
@@ -114,12 +117,15 @@ export function ollamaBaseUrl(): string {
 export interface LlmChoice {
   provider: LlmProvider;
   model: string;
+  /** คีย์ที่หลังบ้านกรอกเอง — ถ้ามีจะใช้แทนคีย์ใน env ของเซิร์ฟเวอร์ */
+  apiKey?: string;
 }
 
 /** ค่าที่หลังบ้านส่งมาแนบกับ request ได้ — ไม่บังคับ */
 export interface LlmChoiceInput {
   provider?: string;
   model?: string;
+  apiKey?: string;
 }
 
 function isProvider(value: unknown): value is LlmProvider {
@@ -136,6 +142,21 @@ export function sanitizeModel(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return MODEL_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * คีย์ที่ส่งมาจากหลังบ้านจะถูกยัดใส่ header `Authorization: Bearer ...`
+ * จึงต้องกันอักขระขึ้นบรรทัดใหม่และช่องว่างให้หมด ไม่งั้นกลายเป็น header injection
+ *
+ * ชุดอักขระนี้ครอบคลุมคีย์ของทุกเจ้าที่รองรับ:
+ *   sk-ant-... · sk-... · sk-or-v1-... · AIza... · AQ.xxxxx (มีจุดในคีย์)
+ */
+const API_KEY_PATTERN = /^[A-Za-z0-9._~+/=-]{16,400}$/;
+
+export function sanitizeApiKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return API_KEY_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 /** ค่าตั้งต้นจาก env — ใช้เมื่อ client ไม่ได้ส่งอะไรมา */
@@ -159,12 +180,14 @@ export function resolveLlm(input?: LlmChoiceInput | null): LlmChoice {
   if (!input) return fromEnv;
 
   const provider = isProvider(input.provider) ? input.provider : fromEnv.provider;
+  const apiKey = sanitizeApiKey(input.apiKey) ?? undefined;
   const model = sanitizeModel(input.model);
-  if (model) return { provider, model };
+  if (model) return { provider, model, apiKey };
 
   return {
     provider,
     model: provider === fromEnv.provider ? fromEnv.model : DEFAULT_MODEL[provider],
+    apiKey,
   };
 }
 
@@ -207,21 +230,35 @@ export function providerEnvKey(provider: LlmProvider): string | null {
   return OPENAI_COMPAT[provider].envKey;
 }
 
-export function providerKey(provider: LlmProvider): string | undefined {
+/**
+ * คีย์ที่จะใช้จริงของเจ้านั้น
+ * คีย์ที่หลังบ้านกรอกมา (override) มาก่อน env เสมอ — บน Vercel แก้ env ผ่านเว็บไม่ได้
+ * ถ้าไม่ยอมให้ override ก็จะเปลี่ยนคีย์ไม่ได้เลยจนกว่าจะ redeploy
+ */
+export function providerKey(provider: LlmProvider, override?: string): string | undefined {
   const envKey = providerEnvKey(provider);
-  if (!envKey) return undefined;
-  return readEnvLoose(envKey);
+  if (!envKey) return undefined; // Ollama ไม่ใช้คีย์ — กัน override หลุดไปที่อื่น
+  return sanitizeApiKey(override) ?? readEnvLoose(envKey);
 }
 
 /** Ollama ไม่ต้องใช้คีย์ ขอแค่มี URL — จะรู้ว่าต่อติดจริงไหมตอนกดทดสอบ */
-export function isProviderReady(provider: LlmProvider): boolean {
+export function isProviderReady(provider: LlmProvider, override?: string): boolean {
   if (provider === "ollama") return true;
-  return Boolean(providerKey(provider));
+  return Boolean(providerKey(provider, override));
+}
+
+/** เวอร์ชันที่รับ choice ทั้งก้อน เพื่อไม่ให้ลืมส่ง apiKey ที่แนบมาด้วย */
+export function isChoiceReady(choice: LlmChoice): boolean {
+  return isProviderReady(choice.provider, choice.apiKey);
 }
 
 let cachedAnthropic: Anthropic | null = null;
 
-export function getAnthropic(): Anthropic | null {
+export function getAnthropic(override?: string): Anthropic | null {
+  // คีย์ที่ผู้ใช้กรอกเองห้ามลงแคช ไม่งั้นคีย์ของคนหนึ่งจะถูกใช้ใน request ของอีกคน
+  const supplied = sanitizeApiKey(override);
+  if (supplied) return new Anthropic({ apiKey: supplied, maxRetries: 1 });
+
   const apiKey = anthropicKey();
   if (!apiKey) return null;
   if (!cachedAnthropic) cachedAnthropic = new Anthropic({ apiKey, maxRetries: 1 });
@@ -296,10 +333,16 @@ export async function callLlmJson<T>(
   const timeoutMs = options.timeoutMs ?? 40_000;
   try {
     if (choice.provider === "anthropic") {
-      return await callAnthropicJson<T>(choice.model, options, timeoutMs);
+      return await callAnthropicJson<T>(choice.model, options, timeoutMs, choice.apiKey);
     }
     if (isOpenAiCompat(choice.provider)) {
-      return await callOpenAiCompatJson<T>(choice.provider, choice.model, options, timeoutMs);
+      return await callOpenAiCompatJson<T>(
+        choice.provider,
+        choice.model,
+        options,
+        timeoutMs,
+        choice.apiKey,
+      );
     }
     return await callOllamaJson<T>(choice.model, options, timeoutMs);
   } catch (error) {
@@ -312,8 +355,9 @@ async function callAnthropicJson<T>(
   model: string,
   { system, prompt, schema, maxTokens, tag }: LlmJsonOptions,
   timeoutMs: number,
+  apiKey?: string,
 ): Promise<T | null> {
-  const client = getAnthropic();
+  const client = getAnthropic(apiKey);
   if (!client) return null;
 
   const message = await client.messages.create(
@@ -353,9 +397,10 @@ async function callOpenAiCompatJson<T>(
   model: string,
   { system, prompt, schema, maxTokens, tag }: LlmJsonOptions,
   timeoutMs: number,
+  apiKey?: string,
 ): Promise<T | null> {
   const cfg = OPENAI_COMPAT[provider];
-  const key = providerKey(provider);
+  const key = providerKey(provider, apiKey);
   if (!key) return null;
 
   const messages = [
@@ -450,25 +495,29 @@ export interface ModelListResult {
  * เหมือนกันหมดไม่ว่าจะเพราะยังไม่ใส่คีย์ คีย์ผิด หรือเน็ตมีปัญหา — วินิจฉัยไม่ได้เลย
  * ตอนนี้ส่งสาเหตุจริงกลับไปให้หน้าหลังบ้านแสดง
  */
-export async function listModels(provider: LlmProvider): Promise<ModelListResult> {
+export async function listModels(
+  provider: LlmProvider,
+  apiKey?: string,
+): Promise<ModelListResult> {
   // OpenRouter เปิดรายชื่อสาธารณะ · Anthropic มีลิสต์สำรองในโค้ดอยู่แล้ว
   // เหลือ OpenAI กับ Gemini ที่ไม่มีคีย์แล้วดูอะไรไม่ได้เลย
   const needsKey = provider === "openai" || provider === "gemini";
   const envKey = providerEnvKey(provider);
-  if (needsKey && envKey && !providerKey(provider)) {
+  if (needsKey && envKey && !providerKey(provider, apiKey)) {
     return {
       models: [],
       error:
-        `ยังไม่ได้ตั้ง ${envKey} บนเซิร์ฟเวอร์ที่กำลังเปิดอยู่ — ` +
-        `ถ้าเพิ่งใส่ใน .env.local ต้องรีสตาร์ท dev server ก่อน ` +
-        `ถ้าเป็นเว็บจริงต้องตั้งที่ Vercel แล้ว redeploy`,
+        `ยังไม่มีคีย์ของ ${envKey} ให้ใช้ — ใส่คีย์ในช่อง API key ด้านบนแล้วกดบันทึกก่อน ` +
+        `หรือจะตั้งเป็น env บนเซิร์ฟเวอร์ก็ได้ (บน Vercel ต้อง redeploy หลังตั้ง)`,
     };
   }
 
   try {
-    if (provider === "anthropic") return { models: await listAnthropicModels(), error: null };
+    if (provider === "anthropic") {
+      return { models: await listAnthropicModels(apiKey), error: null };
+    }
     if (isOpenAiCompat(provider)) {
-      return { models: await listOpenAiCompatModels(provider), error: null };
+      return { models: await listOpenAiCompatModels(provider, apiKey), error: null };
     }
     return { models: await listOllamaModels(), error: null };
   } catch (error) {
@@ -481,8 +530,8 @@ export async function listModels(provider: LlmProvider): Promise<ModelListResult
   }
 }
 
-async function listAnthropicModels(): Promise<ModelOption[]> {
-  const client = getAnthropic();
+async function listAnthropicModels(apiKey?: string): Promise<ModelOption[]> {
+  const client = getAnthropic(apiKey);
   if (!client) return FALLBACK_MODELS.anthropic.map((id) => ({ id, label: id }));
 
   const page = await client.models.list({ limit: 100 });
@@ -494,9 +543,10 @@ async function listAnthropicModels(): Promise<ModelOption[]> {
 
 async function listOpenAiCompatModels(
   provider: OpenAiCompatProvider,
+  apiKey?: string,
 ): Promise<ModelOption[]> {
   const cfg = OPENAI_COMPAT[provider];
-  const key = providerKey(provider);
+  const key = providerKey(provider, apiKey);
   // OpenRouter เปิดรายชื่อสาธารณะ ส่วน OpenAI/Gemini ต้องมีคีย์ก่อนถึงจะดูได้
   if (!key && !cfg.publicModelList) return [];
 
@@ -563,8 +613,8 @@ export async function testLlm(choice: LlmChoice): Promise<LlmTestResult> {
 
 async function pingProvider(choice: LlmChoice): Promise<string> {
   if (choice.provider === "anthropic") {
-    const client = getAnthropic();
-    if (!client) throw new Error("ยังไม่ได้ตั้ง ANTHROPIC_API_KEY");
+    const client = getAnthropic(choice.apiKey);
+    if (!client) throw new Error("ยังไม่มีคีย์ของ Claude — ใส่ในช่อง API key หรือตั้ง ANTHROPIC_API_KEY");
     const message = await client.messages.create(
       {
         model: choice.model,
@@ -578,8 +628,8 @@ async function pingProvider(choice: LlmChoice): Promise<string> {
 
   if (isOpenAiCompat(choice.provider)) {
     const cfg = OPENAI_COMPAT[choice.provider];
-    const key = providerKey(choice.provider);
-    if (!key) throw new Error(`ยังไม่ได้ตั้ง ${cfg.envKey}`);
+    const key = providerKey(choice.provider, choice.apiKey);
+    if (!key) throw new Error(`ยังไม่มีคีย์ — ใส่ในช่อง API key หรือตั้ง ${cfg.envKey}`);
     const data = await fetchJson<ChatCompletion>(
       `${cfg.baseUrl}/chat/completions`,
       {

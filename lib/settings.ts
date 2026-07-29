@@ -38,6 +38,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
 const SETTINGS_KEY = "baijing.settings.v1";
 const QUESTIONS_KEY = "baijing.questions.v1";
 const LLM_KEY = "baijing.llm.v1";
+const API_KEYS_KEY = "baijing.apikeys.v1";
 
 const isBrowser = () => typeof window !== "undefined";
 
@@ -103,7 +104,6 @@ export function resetSettings(): void {
 
 /**
  * เก็บแยกจาก GameSettings เพราะไม่ได้ล็อกตอนเริ่มเกมเหมือนกติกา
- * และไม่มีความลับอยู่ในนี้ — ตัวคีย์ API อยู่ฝั่งเซิร์ฟเวอร์ (env) เสมอ
  *
  * "auto" = ใช้ค่าที่ตั้งไว้ใน env ของเซิร์ฟเวอร์ (LLM_PROVIDER / HINT_MODEL)
  */
@@ -164,16 +164,91 @@ export function resetLlmSettings(): void {
   window.localStorage.removeItem(LLM_KEY);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// คีย์ API ที่กรอกเองจากหลังบ้าน (BYOK)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ทำไมต้องเก็บคีย์ไว้ในเบราว์เซอร์
+ *
+ * ทางหลักยังเป็น env ของเซิร์ฟเวอร์เหมือนเดิม แต่บน Vercel ระบบไฟล์เป็น read-only
+ * จะเขียน .env.local ผ่านหน้าเว็บไม่ได้ ถ้าไม่มีทางนี้ก็แปลว่าเว็บจริงเปลี่ยนคีย์ไม่ได้เลย
+ * ต้องไปตั้งที่ Vercel แล้ว redeploy ทุกครั้ง
+ *
+ * ข้อแลกเปลี่ยนที่ต้องรู้:
+ * - คีย์อยู่ใน localStorage ของเบราว์เซอร์เครื่องนั้น ใครเปิดเครื่องนั้นได้ก็อ่านได้
+ * - คีย์เดินทางไปกับ request ทุกครั้งที่เรียก /api/hint /api/grade /api/debrief
+ *   (ผ่าน HTTPS · เซิร์ฟเวอร์ใช้แล้วทิ้ง ไม่เขียนลงดิสก์ ไม่ log ไม่ส่งกลับ)
+ * - ไม่ได้ผูกกับบัญชี ใครเปิดหลังบ้านบนเครื่องตัวเองก็ใส่คีย์ของตัวเองแยกกัน
+ */
+export type KeyedProvider = "anthropic" | "openai" | "gemini" | "openrouter";
+
+export const KEYED_PROVIDERS: KeyedProvider[] = [
+  "anthropic",
+  "openai",
+  "gemini",
+  "openrouter",
+];
+
+/** ต้องตรงกับ API_KEY_PATTERN ฝั่งเซิร์ฟเวอร์ ไม่งั้นบันทึกได้แต่ใช้ไม่ได้ */
+const API_KEY_PATTERN = /^[A-Za-z0-9._~+/=-]{16,400}$/;
+
+export function isValidApiKey(value: string): boolean {
+  return API_KEY_PATTERN.test(value.trim());
+}
+
+export type ApiKeyMap = Partial<Record<KeyedProvider, string>>;
+
+export function loadApiKeys(): ApiKeyMap {
+  if (!isBrowser()) return {};
+  try {
+    const raw = window.localStorage.getItem(API_KEYS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: ApiKeyMap = {};
+    for (const provider of KEYED_PROVIDERS) {
+      const value = parsed[provider];
+      if (typeof value === "string" && isValidApiKey(value)) out[provider] = value.trim();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveApiKey(provider: KeyedProvider, key: string): void {
+  if (!isBrowser()) return;
+  const next = { ...loadApiKeys(), [provider]: key.trim() };
+  window.localStorage.setItem(API_KEYS_KEY, JSON.stringify(next));
+}
+
+export function clearApiKey(provider: KeyedProvider): void {
+  if (!isBrowser()) return;
+  const next = loadApiKeys();
+  delete next[provider];
+  window.localStorage.setItem(API_KEYS_KEY, JSON.stringify(next));
+}
+
+const isKeyedProvider = (value: string): value is KeyedProvider =>
+  (KEYED_PROVIDERS as string[]).includes(value);
+
 /**
  * แปลงเป็นก้อนที่แนบไปกับ /api/hint, /api/grade, /api/debrief
  * คืน undefined เมื่อยังเป็น "auto" ทั้งหมด เพื่อให้เซิร์ฟเวอร์ใช้ค่า env ตามเดิม
+ *
+ * คีย์จะถูกแนบเฉพาะตอนที่เลือกค่ายไว้ชัดเจนแล้วเท่านั้น — ตอนเป็น "auto"
+ * ฝั่ง client ไม่รู้ว่าเซิร์ฟเวอร์ตั้งค่ายอะไรไว้ จึงไม่รู้ว่าจะส่งคีย์ของใคร
  */
-export function llmRequestPayload(): { provider?: string; model?: string } | undefined {
+export function llmRequestPayload():
+  | { provider?: string; model?: string; apiKey?: string }
+  | undefined {
   const { provider, model } = loadLlmSettings();
+  const apiKey = isKeyedProvider(provider) ? loadApiKeys()[provider] : undefined;
   if (provider === "auto" && !model) return undefined;
   return {
     provider: provider === "auto" ? undefined : provider,
     model: model || undefined,
+    apiKey,
   };
 }
 

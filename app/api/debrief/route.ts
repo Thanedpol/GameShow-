@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getQuestionById } from "@/lib/questions";
 import { openReveal } from "@/lib/hintEngine";
-import { callLlmJson, isProviderReady, resolveLlm } from "@/lib/llm";
+import { callLlmJson, isChoiceReady, resolveLlm } from "@/lib/llm";
 import type { DebriefApiRequest, DebriefApiResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
   });
 
   const choice = resolveLlm(body.llm);
-  if (!isProviderReady(choice.provider) || items.length === 0) {
+  if (!isChoiceReady(choice) || items.length === 0) {
     return NextResponse.json(
       buildResponse(fallbackOverall(body), fallbackNote, "fallback"),
       { headers: { "Cache-Control": "no-store" } },

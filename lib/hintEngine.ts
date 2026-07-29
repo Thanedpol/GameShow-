@@ -11,7 +11,7 @@ import { HINT_BOX_COUNT } from "./scoring";
 import {
   callLlmJson,
   envChoice,
-  isProviderReady,
+  isChoiceReady,
   resolveLlm,
   type LlmChoice,
   type LlmChoiceInput,
@@ -306,7 +306,7 @@ export async function generateHintBoxes(
       truth === "หลอก"
         ? DECEPTIVE_ANGLES[deceptiveIndex++ % DECEPTIVE_ANGLES.length]
         : undefined;
-    const payload = isProviderReady(choice.provider)
+    const payload = isChoiceReady(choice)
       ? await callLlmJson<HintPayload>(choice, {
           system: truth === "จริง" ? DIRECT_SYSTEM : DECEPTIVE_SYSTEM,
           prompt: buildHintPrompt(question, angle, truth),
@@ -454,7 +454,7 @@ export async function gradeOpenAnswer(
     .join("\n");
 
   const choice = resolveLlm(llm);
-  const parsed = isProviderReady(choice.provider)
+  const parsed = isChoiceReady(choice)
     ? await callLlmJson<{
         score?: number;
         feedback?: string;

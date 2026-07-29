@@ -1,5 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { LLM_PROVIDERS, listModels, type LlmProvider, type ModelOption } from "@/lib/llm";
+import {
+  LLM_PROVIDERS,
+  listModels,
+  sanitizeApiKey,
+  type LlmProvider,
+  type ModelOption,
+} from "@/lib/llm";
 
 
 export const runtime = "nodejs";
@@ -7,11 +13,14 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 /**
- * GET /api/admin/models?provider=openrouter
+ * POST /api/admin/models  { provider, apiKey? }
  *   → { provider, models: [{ id, label }] }
  *
  * ใช้เติมดรอปดาวน์ "เลือกโมเดล" ในหลังบ้าน
  * ดึงรายชื่อจริงจากผู้ให้บริการ ไม่ใช่ลิสต์ที่ hardcode ไว้ในโค้ด จะได้ไม่ล้าสมัย
+ *
+ * เป็น POST ไม่ใช่ GET เพราะคีย์ที่หลังบ้านกรอกเองต้องเดินทางใน body
+ * ถ้าใส่ไปกับ query string มันจะไปโผล่ใน log ของเซิร์ฟเวอร์และ history ของเบราว์เซอร์
  */
 
 export interface AdminModelsResponse {
@@ -27,18 +36,25 @@ function authorized(request: NextRequest): boolean {
   return request.headers.get("x-admin-password") === expected;
 }
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   if (!authorized(request)) {
     return NextResponse.json({ error: "รหัสผ่านหลังบ้านไม่ถูกต้อง" }, { status: 401 });
   }
 
-  const raw = request.nextUrl.searchParams.get("provider");
+  let body: { provider?: string; apiKey?: string };
+  try {
+    body = (await request.json()) as { provider?: string; apiKey?: string };
+  } catch {
+    return NextResponse.json({ error: "รูปแบบ JSON ไม่ถูกต้อง" }, { status: 400 });
+  }
+
+  const raw = body.provider;
   if (!raw || !(LLM_PROVIDERS as string[]).includes(raw)) {
     return NextResponse.json({ error: "ไม่รู้จักผู้ให้บริการนี้" }, { status: 400 });
   }
 
   const provider = raw as LlmProvider;
-  const result = await listModels(provider);
+  const result = await listModels(provider, sanitizeApiKey(body.apiKey) ?? undefined);
   const payload: AdminModelsResponse = {
     provider,
     models: result.models,

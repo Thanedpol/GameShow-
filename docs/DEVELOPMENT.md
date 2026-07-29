@@ -17,7 +17,8 @@ cp .env.local.example .env.local
 ```
 
 ใส่คีย์ของเจ้าที่จะใช้ลงใน `.env.local` (`ANTHROPIC_API_KEY` หรือ `OPENROUTER_API_KEY`
-ส่วน Ollama ไม่ต้องใช้คีย์) แล้วรัน:
+ส่วน Ollama ไม่ต้องใช้คีย์) — หรือจะข้ามขั้นนี้ไปกรอกคีย์ที่ `/admin` แท็บ API
+ทีหลังก็ได้ (ดูหัวข้อ "ที่มาของคีย์") แล้วรัน:
 
 ```bash
 npm run dev
@@ -76,7 +77,7 @@ app/
   api/grade/route.ts      POST ให้โมเดลตรวจคำตอบอัตนัยตาม rubric
   api/debrief/route.ts    POST สรุปว่ากล่องแต่ละกล่องออกแบบแบบนั้นเพราะอะไร
   api/admin/config/route.ts  GET สถานะคีย์ · POST เขียน .env.local · PUT ทดสอบเชื่อมต่อ
-  api/admin/models/route.ts  GET รายชื่อโมเดลจริงของ provider ที่ระบุ
+  api/admin/models/route.ts  POST รายชื่อโมเดลจริงของ provider ที่ระบุ
 components/
   SetupScreen · QuestionScreen · DebriefScreen · ScoreBoard · TimerRing · SafetyBanner
 lib/
@@ -140,6 +141,7 @@ localStorage ของเบราว์เซอร์และเซิร์�
 | คำถาม | `localStorage` คีย์ `baijing.questions.v1` | ย้ายเครื่องด้วย Export/Import JSON |
 | กติกา | `localStorage` คีย์ `baijing.settings.v1` | อ่านตอนกด "เริ่มเกม" แล้วล็อกไว้ในสเตต |
 | API — เลือก provider/โมเดล | `localStorage` คีย์ `baijing.llm.v1` | ไม่ใช่ความลับ จึงเปลี่ยนได้แม้บน production |
+| API — คีย์ที่กรอกเอง (BYOK) | `localStorage` คีย์ `baijing.apikeys.v1` | เป็นความลับ · ผูกกับเบราว์เซอร์เครื่องนั้น |
 
 `GameSettings` แยกค่ารายช่วง (`Record<Stage, number>`) สามตัว — `seconds`,
 `maxOpenBoxes`, `points`, `counts` — ส่วน `boxCount` / `boxCostRatio` / `maxTokens`
@@ -147,17 +149,41 @@ localStorage ของเบราว์เซอร์และเซิร์�
 final 4 ข้อ/20 วิ/2 กล่อง `normalizeSettings()` clamp `maxOpenBoxes` ไม่ให้เกิน `boxCount`
 | API | `.env.local` (dev เท่านั้น) | ไม่เคยส่งคีย์เต็มกลับไปฝั่ง client |
 
+**ที่มาของคีย์ — มีสองทาง เรียงตามลำดับความสำคัญ**
+
+1. **คีย์ที่กรอกในแท็บ API** (BYOK) — เก็บใน `localStorage` แล้วแนบไปกับ request
+   ทุกครั้งในฟิลด์ `llm.apiKey` เซิร์ฟเวอร์ใช้เฉพาะ request นั้น ไม่เขียนลงดิสก์
+   ไม่ log และไม่เคยส่งกลับ (`providerKey()` / `getAnthropic()` ใน `lib/llm.ts`)
+2. **env ของเซิร์ฟเวอร์** — `ANTHROPIC_API_KEY` ฯลฯ ใช้เมื่อไม่มีคีย์จากข้อ 1
+
+ทางที่ 1 มีเพราะบน Vercel ระบบไฟล์เป็น read-only จะแก้ `.env.local` ผ่านหน้าเว็บไม่ได้
+ถ้าไม่มีทางนี้ เว็บจริงจะเปลี่ยนคีย์ไม่ได้เลยจนกว่าจะไปตั้งที่ Vercel แล้ว redeploy
+
+**ข้อแลกเปลี่ยนของ BYOK ที่ต้องรู้**
+
+- คีย์อยู่ใน `localStorage` ของเบราว์เซอร์เครื่องนั้น — ใครเข้าถึงเครื่องนั้นได้ก็อ่านได้
+  และถ้ามีช่องโหว่ XSS บนโดเมนนี้ คีย์จะถูกดูดออกไปได้ ต่างจากคีย์ที่อยู่ใน env
+- ถ้าต้องการให้ทุกคนที่เข้าเว็บใช้คีย์เดียวกัน ให้ตั้งเป็น env บน Vercel แทน
+  คีย์ใน localStorage เป็นของเบราว์เซอร์เครื่องนั้นคนเดียว
+- ยังไม่มี auth บน API route ตามเดิม (ดูหัวข้อ "ข้อจำกัดที่รู้อยู่")
+
 **ข้อจำกัดที่ตั้งใจของแท็บ API**
 
-- แท็บนี้แยกของสองอย่างออกจากกันชัดเจน:
-  **คีย์** อยู่ฝั่งเซิร์ฟเวอร์ (env) เท่านั้น · **การเลือก provider/โมเดล** อยู่ใน localStorage
-  แล้วแนบไปกับ request ตอนเล่น (`llm: { provider, model }`) เพราะไม่ใช่ความลับ
-  ผลคือบน production ยังสลับเจ้า/โมเดลได้ ทั้งที่แก้คีย์ไม่ได้
-- เซิร์ฟเวอร์ตรวจซ้ำเสมอ — provider ต้องอยู่ใน allowlist และชื่อโมเดลต้องผ่าน
-  `/^[\w.:\/-]{1,120}$/` (`resolveLlm()` ใน `lib/llm.ts`) จึงยัดค่ามั่วจาก client ไม่ได้
+- เซิร์ฟเวอร์ตรวจซ้ำเสมอ — provider ต้องอยู่ใน allowlist · ชื่อโมเดลต้องผ่าน
+  `/^[\w.:\/-]{1,120}$/` · คีย์ต้องผ่าน `/^[A-Za-z0-9._~+/=-]{16,400}$/`
+  (`resolveLlm()` / `sanitizeApiKey()` ใน `lib/llm.ts`) จึงยัดค่ามั่วจาก client ไม่ได้
+  ชุดอักขระของคีย์ตัดช่องว่างและ CR/LF ออก เพื่อกัน header injection ตอนต่อเป็น
+  `Authorization: Bearer ...`
+- `/api/admin/models` เป็น **POST** ไม่ใช่ GET เพราะคีย์ต้องเดินทางใน body
+  ถ้าใส่ไปกับ query string จะไปโผล่ใน log ของเซิร์ฟเวอร์และ history ของเบราว์เซอร์
+- คีย์ที่กรอกเองไม่ถูกแคชเป็น client ของ SDK ข้าม request — สร้างใหม่ทุกครั้ง
+  ไม่งั้นคีย์ของคนหนึ่งจะถูกใช้ใน request ของอีกคนบน instance เดียวกัน
+- **ที่อยู่ Ollama แก้ผ่านเบราว์เซอร์ไม่ได้** ตั้งใจให้ต่างจากคีย์ เพราะค่านั้นคือ URL
+  ที่เซิร์ฟเวอร์จะยิงไปหา ถ้าให้ client กำหนดได้ก็เปิดช่อง SSRF
 - เขียน `.env.local` ได้เฉพาะตอนรัน dev — บน production ระบบไฟล์เป็น read-only
-  และการเปิดให้เขียน env ผ่านเว็บสาธารณะคือช่องโหว่ หน้าเว็บจะแจ้งให้ไปตั้งที่ Vercel แทน
-- บันทึกแล้วต้อง **รีสตาร์ท dev server** เพราะ Next.js อ่าน `.env.local` ตอนบูตเท่านั้น
+  และการเปิดให้เขียน env ผ่านเว็บสาธารณะคือช่องโหว่
+- คีย์ที่ลงไป `.env.local` ต้อง **รีสตาร์ท dev server** ถึงจะมีผล เพราะ Next.js
+  อ่านไฟล์นี้ตอนบูตเท่านั้น — ส่วนคีย์ใน localStorage มีผลทันทีไม่ต้องรีสตาร์ท
 - ตั้ง `ADMIN_PASSWORD` เพื่อบังคับรหัสผ่านก่อนแก้/ดูสถานะ
 
 **เพิ่มผู้ให้บริการใหม่** แก้ที่ `lib/llm.ts` จุดเดียว — เติมใน `LLM_PROVIDERS`,

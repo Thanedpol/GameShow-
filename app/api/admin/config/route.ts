@@ -5,6 +5,7 @@ import {
   LLM_PROVIDERS,
   PROVIDER_LABEL,
   envChoice,
+  isChoiceReady,
   isProviderReady,
   ollamaBaseUrl,
   providerEnvKey,
@@ -12,6 +13,7 @@ import {
   resolveLlm,
   sanitizeModel,
   testLlm,
+  type LlmChoiceInput,
   type LlmProvider,
 } from "@/lib/llm";
 
@@ -329,18 +331,21 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "รหัสผ่านหลังบ้านไม่ถูกต้อง" }, { status: 401 });
   }
 
-  let requested: { provider?: string; model?: string } | null = null;
+  let requested: LlmChoiceInput | null = null;
   try {
-    requested = (await request.json()) as { provider?: string; model?: string };
+    requested = (await request.json()) as LlmChoiceInput;
   } catch {
     requested = null;
   }
 
+  // apiKey ที่แนบมาถูกใช้เฉพาะ request นี้ ไม่เขียนลงไฟล์และไม่ส่งกลับ
   const choice = resolveLlm(requested);
-  if (!isProviderReady(choice.provider)) {
+  if (!isChoiceReady(choice)) {
     return NextResponse.json({
       ok: false,
-      message: `ยังไม่ได้ตั้ง ${providerEnvKey(choice.provider)} — เกมจะทำงานในโหมดสำรอง`,
+      message:
+        `ยังไม่มีคีย์ให้ใช้ — ใส่ในช่อง API key แล้วกดบันทึก ` +
+        `หรือตั้ง ${providerEnvKey(choice.provider)} บนเซิร์ฟเวอร์ · ตอนนี้เกมจะใช้โหมดสำรอง`,
     });
   }
 

@@ -6,7 +6,11 @@ import { QUESTION_BANK } from "@/lib/questions";
 import {
   DEFAULT_LLM_SETTINGS,
   DEFAULT_SETTINGS,
+  KEYED_PROVIDERS,
+  clearApiKey,
   isUsingCustomQuestions,
+  isValidApiKey,
+  loadApiKeys,
   loadLlmSettings,
   loadQuestions,
   loadSettings,
@@ -14,10 +18,13 @@ import {
   resetQuestions,
   resetSettings,
   sanitizeQuestion,
+  saveApiKey,
   saveLlmSettings,
   saveQuestions,
   saveSettings,
+  type ApiKeyMap,
   type GameSettings,
+  type KeyedProvider,
   type LlmProviderChoice,
   type LlmSettings,
 } from "@/lib/settings";
@@ -803,6 +810,8 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [customModel, setCustomModel] = useState("");
   // คีย์ที่พิมพ์ค้างไว้ ยังไม่บันทึก — key คือชื่อ provider
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
+  // คีย์ที่บันทึกไว้ใน localStorage ของเบราว์เซอร์เครื่องนี้
+  const [browserKeys, setBrowserKeys] = useState<ApiKeyMap>({});
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(
@@ -827,6 +836,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     const saved = loadLlmSettings();
     setLlm(saved);
     setCustomModel(saved.model);
+    setBrowserKeys(loadApiKeys());
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -835,6 +845,21 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const effectiveProvider =
     llm.provider === "auto" ? (cfg?.serverProvider ?? "anthropic") : llm.provider;
   const activeStatus = cfg?.providers.find((p) => p.provider === effectiveProvider);
+
+  const keyedProvider = (value: string): KeyedProvider | null =>
+    (KEYED_PROVIDERS as string[]).includes(value) ? (value as KeyedProvider) : null;
+
+  /**
+   * คีย์ที่จะถูกใช้จริงในฝั่งเบราว์เซอร์
+   *
+   * แนบไปกับ request ได้เฉพาะตอนที่ล็อกค่ายไว้แล้ว — ถ้ายังเป็น "auto"
+   * ฝั่งนี้ไม่รู้ว่าเซิร์ฟเวอร์ตั้งค่ายอะไร จึงไม่รู้ว่าควรส่งคีย์ของใคร
+   */
+  const activeKeyed = llm.provider === "auto" ? null : keyedProvider(effectiveProvider);
+  const browserKey = activeKeyed ? browserKeys[activeKeyed] : undefined;
+  /** มีคีย์เก็บไว้ในเบราว์เซอร์แต่โหมด auto ไม่ใช้ — ต้องบอก ไม่งั้นคนจะงงว่าคีย์หายไปไหน */
+  const stashedKeyProvider =
+    llm.provider === "auto" ? KEYED_PROVIDERS.find((p) => browserKeys[p]) : undefined;
   /** ข้อมูลของค่ายที่กำลังจะถูกใช้จริง — ใช้วาดแผงตั้งค่าด้านล่าง */
   const activeInfo =
     PROVIDER_CHOICES.find((p) => p.value === effectiveProvider) ?? PROVIDER_CHOICES[0];
@@ -857,7 +882,12 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     setLoadingModels(true);
     setModelError(null);
     try {
-      const res = await fetch(`/api/admin/models?provider=${effectiveProvider}`, { headers });
+      // POST ไม่ใช่ GET เพราะคีย์ต้องไปใน body ไม่ใช่ query string
+      const res = await fetch("/api/admin/models", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ provider: effectiveProvider, apiKey: browserKey }),
+      });
       const data = (await res.json()) as AdminModelsResponse | { error?: string };
 
       if (!("models" in data)) {
@@ -909,25 +939,65 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     onFlash("คืนค่าเป็นตามเซิร์ฟเวอร์แล้ว");
   }
 
+  /**
+   * บันทึกคีย์ที่กรอก
+   *
+   * เก็บลง localStorage เสมอ เพราะเป็นทางเดียวที่ใช้ได้ทั้งบนเครื่องและบนเว็บจริง
+   * (บน Vercel ระบบไฟล์เป็น read-only จะเขียน .env.local ไม่ได้)
+   * ตอนรัน dev ในเครื่องจะเขียนลง .env.local ให้ด้วย จะได้ไม่หายตอนล้างเบราว์เซอร์
+   */
   async function handleSaveKeys() {
-    const keys = Object.fromEntries(
-      Object.entries(keyDrafts)
-        .map(([name, value]) => [name, value.trim()])
-        .filter(([, value]) => value.length > 0),
-    );
-    const res = await fetch("/api/admin/config", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        keys: Object.keys(keys).length > 0 ? keys : undefined,
-        ollamaBaseUrl: ollamaUrl.trim() || undefined,
-      }),
-    });
-    const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
-    onFlash(data.message ?? data.error ?? "ไม่ทราบผล");
+    const draft = (keyDrafts[effectiveProvider] ?? "").trim();
+    const target = keyedProvider(effectiveProvider);
+
+    if (draft && target) {
+      if (!isValidApiKey(draft)) {
+        onFlash("คีย์ไม่ถูกรูปแบบ — ต้องยาว 16 ตัวขึ้นไป และห้ามมีช่องว่างหรือขึ้นบรรทัดใหม่");
+        return;
+      }
+      saveApiKey(target, draft);
+      setBrowserKeys(loadApiKeys());
+      // เก็บคีย์ของค่ายไหนไว้ก็ล็อกค่ายนั้นให้เลย ไม่งั้นคีย์จะไม่ถูกแนบไปกับ request
+      const next: LlmSettings = { ...llm, provider: target };
+      setLlm(next);
+      saveLlmSettings(next);
+    }
+
+    const messages: string[] = [];
+    if (draft && target) messages.push(`เก็บคีย์ ${providerLabel} ไว้ในเบราว์เซอร์นี้แล้ว ใช้ได้ทันที`);
+
+    // dev เท่านั้น — เขียนลง .env.local ให้ด้วยเพื่อให้ค่าอยู่ยาว
+    if (cfg?.writable && (draft || ollamaUrl.trim())) {
+      try {
+        const res = await fetch("/api/admin/config", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            keys: draft && target ? { [target]: draft } : undefined,
+            ollamaBaseUrl: ollamaUrl.trim() || undefined,
+          }),
+        });
+        const data = (await res.json()) as { message?: string; error?: string };
+        if (data.error) messages.push(`(.env.local: ${data.error})`);
+        else messages.push("เขียนลง .env.local ให้แล้ว (มีผลถาวรหลังรีสตาร์ท dev server)");
+      } catch (e) {
+        messages.push(`(เขียน .env.local ไม่สำเร็จ: ${String(e)})`);
+      }
+    }
+
+    onFlash(messages.join(" · ") || "ยังไม่ได้กรอกอะไรให้บันทึก");
     // ล้างช่องคีย์ทิ้งเสมอ ไม่ให้ค้างอยู่บนหน้าจอหลังบันทึก
     setKeyDrafts({});
+    setTestResult(null);
     await refresh();
+  }
+
+  function handleClearBrowserKey() {
+    if (!activeKeyed) return;
+    clearApiKey(activeKeyed);
+    setBrowserKeys(loadApiKeys());
+    setTestResult(null);
+    onFlash(`ลบคีย์ ${providerLabel} ออกจากเบราว์เซอร์นี้แล้ว`);
   }
 
   async function handleTest() {
@@ -940,6 +1010,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         body: JSON.stringify({
           provider: llm.provider === "auto" ? undefined : llm.provider,
           model: llm.model || undefined,
+          apiKey: browserKey,
         }),
       });
       setTestResult((await res.json()) as { ok: boolean; message: string });
@@ -951,8 +1022,8 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   }
 
   const keysDirty =
-    Object.values(keyDrafts).some((v) => v.trim().length > 0) || Boolean(ollamaUrl.trim());
-  const ready = activeStatus?.ready ?? false;
+    Boolean((keyDrafts[effectiveProvider] ?? "").trim()) || Boolean(ollamaUrl.trim());
+  const ready = Boolean(browserKey) || (activeStatus?.ready ?? false);
 
   return (
     <div className="space-y-4">
@@ -971,9 +1042,14 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           {PROVIDER_CHOICES.map((p) => {
             const active = llm.provider === p.value;
             const status = cfg?.providers.find((s) => s.provider === p.value);
+            const keyed = keyedProvider(p.value);
             // auto ไม่มีคีย์ของตัวเอง ส่วน Ollama ไม่ต้องใช้คีย์จึงถือว่าพร้อมเสมอ
+            // ค่ายที่ใช้คีย์ นับทั้งคีย์ในเบราว์เซอร์และคีย์ที่ตั้งไว้บนเซิร์ฟเวอร์
             const configured =
-              p.value === "auto" ? false : status ? !status.envKey || status.ready : false;
+              p.value === "auto"
+                ? false
+                : Boolean(keyed && browserKeys[keyed]) ||
+                  (status ? !status.envKey || status.ready : false);
             return (
               <button
                 key={p.value}
@@ -1025,6 +1101,15 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               </>
             ) : null}{" "}
             ถ้าอยากล็อกค่ายเอง ให้กดเลือกการ์ดด้านบน
+            {stashedKeyProvider ? (
+              <>
+                <br />
+                <span className="text-amber-200">
+                  หมายเหตุ — มีคีย์ที่เก็บไว้ในเบราว์เซอร์นี้อยู่ แต่โหมด
+                  &quot;ตามเซิร์ฟเวอร์&quot; จะไม่ใช้คีย์นั้น ต้องกดเลือกการ์ดของค่ายนั้นก่อน
+                </span>
+              </>
+            ) : null}
           </p>
         ) : null}
 
@@ -1042,26 +1127,29 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                   setKeyDrafts({ ...keyDrafts, [effectiveProvider]: e.target.value })
                 }
                 placeholder={
-                  activeStatus?.ready
-                    ? `ตั้งไว้แล้ว · ${activeStatus.maskedKey}`
-                    : activeInfo.keyPlaceholder
+                  browserKey
+                    ? "เก็บคีย์ไว้ในเบราว์เซอร์นี้แล้ว — พิมพ์ใหม่เพื่อเปลี่ยน"
+                    : activeStatus?.ready
+                      ? `เซิร์ฟเวอร์ตั้งไว้แล้ว · ${activeStatus.maskedKey} — พิมพ์ใหม่เพื่อใช้คีย์ของคุณแทน`
+                      : activeInfo.keyPlaceholder
                 }
                 autoComplete="off"
                 spellCheck={false}
-                disabled={!cfg?.writable}
-                className="field flex-1 py-2.5 text-sm disabled:opacity-50"
+                className="field flex-1 py-2.5 text-sm"
               />
               <button
                 onClick={() => void handleSaveKeys()}
-                disabled={!cfg?.writable || !keysDirty}
-                className="btn-primary shrink-0 px-5 py-2.5 text-sm"
+                disabled={!keysDirty}
+                className="btn-primary shrink-0 px-5 py-2.5 text-sm disabled:opacity-40"
               >
                 บันทึก
               </button>
             </div>
             <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
-              {activeStatus?.ready ? (
-                <span className="text-teal-300">มีคีย์แล้ว</span>
+              {browserKey ? (
+                <span className="text-teal-300">ใช้คีย์ในเบราว์เซอร์นี้</span>
+              ) : activeStatus?.ready ? (
+                <span className="text-teal-300">ใช้คีย์ของเซิร์ฟเวอร์</span>
               ) : (
                 <span className="text-amber-300">ยังไม่มีคีย์</span>
               )}{" "}
@@ -1073,10 +1161,22 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               >
                 ขอได้ที่นี่
               </a>{" "}
-              —{" "}
+              — คีย์ที่กรอกตรงนี้เก็บใน localStorage ของเบราว์เซอร์เครื่องนี้
+              และถูกแนบไปกับทุกครั้งที่เกมเรียก AI
               {cfg?.writable
-                ? `บันทึกลง .env.local ในเครื่องนี้ (${activeStatus?.envKey ?? "—"}) แล้วต้องรีสตาร์ท dev server`
-                : `เว็บจริงแก้ที่นี่ไม่ได้ ต้องตั้ง ${activeStatus?.envKey ?? "—"} ที่ Vercel แล้ว Redeploy`}
+                ? ` ตอนรันในเครื่องจะเขียนลง .env.local (${activeStatus?.envKey ?? "—"}) ให้ด้วย`
+                : ` ถ้าอยากให้ทุกคนใช้ร่วมกัน ให้ตั้ง ${activeStatus?.envKey ?? "—"} ที่ Vercel แล้ว Redeploy แทน`}
+              {browserKey ? (
+                <>
+                  {" · "}
+                  <button
+                    onClick={handleClearBrowserKey}
+                    className="text-rose-300 underline hover:text-rose-200"
+                  >
+                    ลบคีย์ออกจากเบราว์เซอร์
+                  </button>
+                </>
+              ) : null}
             </p>
           </div>
         ) : null}
