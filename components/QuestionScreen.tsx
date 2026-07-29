@@ -32,7 +32,6 @@ type Local =
   | "answering"
   | "performing"
   | "grading"
-  | "rating"
   | "steal"
   | "result";
 
@@ -98,7 +97,6 @@ export default function QuestionScreen() {
   const [useToken, setUseToken] = useState(false);
   const [choice, setChoice] = useState<string | null>(null);
   const [text, setText] = useState("");
-  const [ratings, setRatings] = useState<number[]>([]);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [revealed, setRevealed] = useState<RevealedHintBox[] | null>(null);
   const [stealerId, setStealerId] = useState<string | null>(null);
@@ -147,7 +145,6 @@ export default function QuestionScreen() {
     setUseToken(false);
     setChoice(null);
     setText("");
-    setRatings([]);
     setOutcome(null);
     setRevealed(null);
     setStealerId(null);
@@ -366,6 +363,42 @@ export default function QuestionScreen() {
     ],
   );
 
+  /**
+   * ปิดไมค์แล้วส่งคลิปให้โค้ชฟัง — ไม่บล็อกการเดินเกม
+   * ฟีดแบ็กจะไปโผล่ในหน้าสรุปผลของข้อนั้นเมื่อฟังเสร็จ
+   */
+  const sendClipToCoach = useCallback(async (q: NonNullable<typeof question>) => {
+    const clip = await recorder.stop();
+    if (!clip) return;
+    setCritiqueState("listening");
+    try {
+      const res = await fetch("/api/critique", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio: clip.base64,
+          mimeType: clip.mimeType,
+          task: q.task ?? q.prompt,
+          rubric: q.rubric,
+          llm: llmRequestPayload("voice"),
+        }),
+      });
+      const data = (await res.json()) as CritiqueApiResponse;
+      if (data.ok && data.critique) {
+        setCritique(data.critique);
+        setCritiqueState("done");
+      } else {
+        setCritiqueReason(data.reason ?? "ไม่ทราบสาเหตุ");
+        setCritiqueState("failed");
+      }
+    } catch (e) {
+      setCritiqueReason(String(e));
+      setCritiqueState("failed");
+    }
+    // recorder.stop เป็น callback ที่นิ่ง
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const finish = useCallback(
     // picked ส่งตรงมาจากปุ่มที่กด — อ่านจาก state ไม่ได้เพราะ React ยังไม่ re-render
     // ทำให้ finish() ที่ถูกสร้างไว้รอบก่อนยังเห็น choice เป็นค่าเดิม
@@ -383,7 +416,12 @@ export default function QuestionScreen() {
         return;
       }
 
-      if (question.format === "open") {
+      // อัตนัยกับโชว์ความสามารถเดินทางเดียวกันแล้ว — พิมพ์คำตอบ แล้ว AI ตรวจตามเกณฑ์
+      // ต่างกันแค่ข้อโชว์มีเสียงที่อัดไว้ให้โค้ชฟังเพิ่ม
+      if (question.format === "open" || question.format === "performance") {
+        // ปิดไมค์แล้วส่งคลิปให้โค้ชฟังแบบไม่บล็อก ทำก่อนตรวจคำตอบเพื่อให้สองงานวิ่งขนานกัน
+        if (question.format === "performance") void sendClipToCoach(question);
+
         const answer = textRef.current.trim();
         if (!answer) {
           commit({ answer: null, quality: 0, timedOut: true });
@@ -422,60 +460,11 @@ export default function QuestionScreen() {
         return;
       }
 
-      // performance → ไปหน้าให้ดาว (ไม่จับเวลาช่วงให้คะแนน)
-      stopTimer();
-      resolvedRef.current = false;
-      setRatings(Array((others.length || 1) as number).fill(0));
-      setPhase("rating");
-
-      // ส่งคลิปให้โค้ชฟังแบบไม่บล็อก — กรรมการกดดาวได้เลยไม่ต้องรอ
-      void (async () => {
-        const clip = await recorder.stop();
-        if (!clip) return;
-        setCritiqueState("listening");
-        try {
-          const res = await fetch("/api/critique", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              audio: clip.base64,
-              mimeType: clip.mimeType,
-              task: question.task ?? question.prompt,
-              rubric: question.rubric,
-              llm: llmRequestPayload("voice"),
-            }),
-          });
-          const data = (await res.json()) as CritiqueApiResponse;
-          if (data.ok && data.critique) {
-            setCritique(data.critique);
-            setCritiqueState("done");
-          } else {
-            setCritiqueReason(data.reason ?? "ไม่ทราบสาเหตุ");
-            setCritiqueState("failed");
-          }
-        } catch (e) {
-          setCritiqueReason(String(e));
-          setCritiqueState("failed");
-        }
-      })();
     },
-    // recorder.stop เป็น callback ที่นิ่ง ไม่ต้องใส่ใน deps
+    // sendClipToCoach กับ recorder เป็น callback ที่นิ่ง ไม่ต้องใส่ใน deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [question, choice, commit, others.length, stopTimer],
+    [question, choice, commit, stopTimer],
   );
-
-  function submitRatings() {
-    if (resolvedRef.current) return;
-    resolvedRef.current = true;
-    const valid = ratings.filter((r) => r > 0);
-    const avg = valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
-    commit({
-      answer: "แสดงสด",
-      quality: Math.round((avg / 5) * 100),
-      timedOut: false,
-      feedback: valid.length ? `คะแนนเฉลี่ย ${avg.toFixed(1)} / 5 ดาว` : "ไม่มีใครให้คะแนน",
-    });
-  }
 
   function endSteal(correct: boolean) {
     stopTimer();
@@ -494,7 +483,7 @@ export default function QuestionScreen() {
   // ── เทิร์นของบอท ─────────────────────────────────────────────────────────
   useEffect(() => {
     // ครอบคลุม "performing" ด้วย ไม่งั้นข้อโชว์ความสามารถของบอทจะค้าง
-    // แล้วเด้งไปให้คนจริงกดดาวให้การแสดงที่ไม่เคยเกิดขึ้น
+    // แล้วค้างรอคำตอบของการแสดงที่ไม่เคยเกิดขึ้น
     if (!isBotTurn || !question || (phase !== "answering" && phase !== "performing")) return;
     const plan = planBotTurn(question, "ปกติ");
     setBotTurn(plan);
@@ -559,7 +548,7 @@ export default function QuestionScreen() {
           remaining={timer.remaining}
           total={stageSeconds * 1000}
           label={phase === "steal" ? "แย่งตอบ" : "เวลาที่เหลือ"}
-          paused={phase === "grading" || phase === "rating" || phase === "result"}
+          paused={phase === "grading" || phase === "result"}
         />
       </div>
 
@@ -757,144 +746,54 @@ export default function QuestionScreen() {
         </div>
       ) : null}
 
-      {/* ── โชว์ความสามารถ ──────────────────────────────────────────────── */}
+      {/* ── โชว์ความสามารถ — แสดงสดแล้วพิมพ์สรุปสิ่งที่พูด ─────────────────
+          เดิมกดจบแล้วเด้งไปให้คนกดดาว ซึ่งใช้ไม่ได้เวลาเล่นคนเดียว
+          ตอนนี้ให้พิมพ์คำตอบแล้ว AI ตรวจตามเกณฑ์เหมือนข้ออัตนัย
+          ส่วนเสียงที่อัดไว้เอาไปให้โค้ชฟังเป็นฟีดแบ็กเพิ่ม ไม่ใช่ตัวให้คะแนน */}
       {phase === "performing" && !isBotTurn ? (
-        <div className="panel space-y-3 p-5 text-center">
-          <p className="text-sm text-slate-300">
-            เริ่มแสดงได้เลย — จับเวลาอยู่ พอจบแล้วกดปุ่มด้านล่างเพื่อให้กรรมการให้คะแนน
-          </p>
-
-          {recorder.state === "recording" ? (
-            <p className="flex items-center justify-center gap-2 text-xs text-rose-200">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
-              กำลังอัดเสียงไว้ให้โค้ช AI ฟัง
+        <div className="space-y-2">
+          <div className="panel space-y-2 p-4">
+            <p className="text-sm text-slate-300">
+              แสดงสดได้เลย — จับเวลาอยู่ · พอจบแล้วพิมพ์สรุปสิ่งที่คุณพูด/ทำ
+              ลงในช่องด้านล่าง แล้วกดส่งให้ AI ตรวจตามเกณฑ์
             </p>
-          ) : recorder.state === "denied" ? (
-            <p className="text-xs text-slate-500">
-              ไม่ได้สิทธิ์ใช้ไมค์ — เล่นต่อได้ตามปกติ แค่ไม่มีฟีดแบ็กจากโค้ช
-            </p>
-          ) : recorder.state === "unsupported" ? (
-            <p className="text-xs text-slate-500">
-              เบราว์เซอร์นี้อัดเสียงไม่ได้ — เล่นต่อได้ตามปกติ
-            </p>
-          ) : null}
-
-          <button onClick={() => void finish(false)} className="btn-teal w-full py-4 text-lg">
-            จบการแสดง → ให้คะแนน
-          </button>
-        </div>
-      ) : null}
-
-      {/* ── ให้ดาว ──────────────────────────────────────────────────────── */}
-      {phase === "rating" ? (
-        <div className="panel space-y-4 p-5">
-          <h3 className="text-base font-bold text-white">กรรมการให้คะแนน</h3>
-          <p className="text-xs text-slate-400">
-            {others.length > 0
-              ? "ให้แต่ละฝ่ายกดดาว 1–5 ตามเกณฑ์ด้านล่าง"
-              : "โหมดเล่นคนเดียว — ประเมินตัวเองตามตรง"}
-          </p>
-          {question.rubric ? (
-            <p className="rounded-lg bg-white/[0.05] px-3 py-2 text-xs leading-relaxed text-slate-300">
-              <b className="text-slate-200">เกณฑ์:</b> {question.rubric}
-            </p>
-          ) : null}
-
-          {/* ── ฟีดแบ็กจากโค้ช AI — ประกอบการตัดสิน ไม่ใช่ตัวตัดสิน ──────── */}
-          {critiqueState === "listening" ? (
-            <p className="flex items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-sky-300" />
-              โค้ช AI กำลังฟังคลิป...
-            </p>
-          ) : critiqueState === "done" && critique ? (
-            <div className="space-y-2 rounded-xl border border-teal-300/40 bg-teal-400/10 p-3">
-              <p className="text-xs font-bold text-teal-100">
-                🎤 โค้ชเสียงฟังแล้วว่า
-                <span className="ml-1 font-normal text-teal-200/70">
-                  (ความเห็นประกอบ — ดาวยังอยู่ที่กรรมการ)
-                </span>
+            {recorder.state === "recording" ? (
+              <p className="flex items-center gap-2 text-xs text-rose-200">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
+                กำลังอัดเสียงไว้ให้โค้ช AI ฟัง แล้วให้ฟีดแบ็กตอนจบข้อ
               </p>
-              {critique.audible ? (
-                <>
-                  <p className="text-xs leading-relaxed text-teal-50">{critique.summary}</p>
-                  {critique.strengths.length > 0 ? (
-                    <ul className="space-y-0.5">
-                      {critique.strengths.map((s, i) => (
-                        <li key={i} className="text-[11px] leading-relaxed text-teal-100">
-                          ✓ {s}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {critique.improvements.length > 0 ? (
-                    <ul className="space-y-0.5">
-                      {critique.improvements.map((s, i) => (
-                        <li key={i} className="text-[11px] leading-relaxed text-amber-100">
-                          → {s}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {critique.technique ? (
-                    <p className="border-t border-white/10 pt-1.5 text-[11px] leading-relaxed text-slate-300">
-                      <b className="text-slate-200">จุดที่หูคนทั่วไปมักไม่ทัน:</b>{" "}
-                      {critique.technique}
-                    </p>
-                  ) : null}
-                </>
-              ) : (
-                <p className="text-xs leading-relaxed text-amber-100">
-                  {critique.summary || "เสียงเบาเกินไปจนประเมินไม่ได้"}
-                </p>
-              )}
-            </div>
-          ) : critiqueState === "failed" ? (
-            <p className="rounded-lg border border-white/10 px-3 py-2 text-[11px] text-slate-500">
-              ไม่ได้ฟีดแบ็กจากโค้ชรอบนี้ — {critiqueReason}
-            </p>
-          ) : null}
-
-          <div className="space-y-2.5">
-            {(others.length > 0 ? others : [active]).map((rater, i) => (
-              <div key={rater.id} className="flex items-center justify-between gap-3">
-                <span className="truncate text-sm text-slate-200">
-                  {others.length > 0 ? rater.name : "ประเมินตัวเอง"}
-                </span>
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                      onClick={() =>
-                        setRatings((prev) => {
-                          const next = [...prev];
-                          next[i] = star;
-                          return next;
-                        })
-                      }
-                      aria-label={`${rater.name} ให้ ${star} ดาว`}
-                      className={`h-9 w-9 rounded-lg border text-lg transition ${
-                        (ratings[i] ?? 0) >= star
-                          ? "border-cyan-300/70 bg-cyan-400/20"
-                          : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.08]"
-                      }`}
-                    >
-                      {(ratings[i] ?? 0) >= star ? "★" : "☆"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+            ) : recorder.state === "denied" ? (
+              <p className="text-xs text-slate-500">
+                ไม่ได้สิทธิ์ใช้ไมค์ — เล่นต่อได้ตามปกติ แค่ไม่มีฟีดแบ็กจากโค้ช
+              </p>
+            ) : recorder.state === "unsupported" ? (
+              <p className="text-xs text-slate-500">
+                เบราว์เซอร์นี้อัดเสียงไม่ได้ — เล่นต่อได้ตามปกติ
+              </p>
+            ) : null}
           </div>
 
-          <button
-            onClick={submitRatings}
-            disabled={!ratings.some((r) => r > 0)}
-            className="btn-primary w-full"
-          >
-            ยืนยันคะแนน
-          </button>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={5}
+            maxLength={1200}
+            placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป... (AI จะตรวจตามเกณฑ์ของข้อนี้)"
+            className="field min-h-[130px] resize-y leading-relaxed"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500">{text.length}/1200</span>
+            <button
+              onClick={() => void finish(false)}
+              disabled={!text.trim()}
+              className="btn-teal px-6 py-2.5 text-sm"
+            >
+              จบการแสดง → ส่งให้ตรวจ
+            </button>
+          </div>
         </div>
       ) : null}
+
 
       {/* ── กำลังตรวจ ───────────────────────────────────────────────────── */}
       {phase === "grading" ? (
@@ -993,6 +892,53 @@ export default function QuestionScreen() {
             {question.explanation ? (
               <p className="mt-2 text-sm leading-relaxed text-slate-400">
                 {question.explanation}
+              </p>
+            ) : null}
+
+            {/* ── ฟีดแบ็กจากโค้ชเสียง — เฉพาะข้อโชว์ความสามารถที่อัดเสียงไว้ ──
+                ไม่มีผลต่อคะแนน เป็นคำแนะนำให้เอาไปฝึกต่ออย่างเดียว */}
+            {critiqueState === "listening" ? (
+              <p className="mt-3 flex items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-100">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/20 border-t-sky-300" />
+                โค้ชเสียงกำลังฟังคลิปที่คุณเพิ่งแสดง...
+              </p>
+            ) : critiqueState === "done" && critique ? (
+              <div className="mt-3 space-y-2 rounded-xl border border-teal-300/40 bg-teal-400/10 p-3">
+                <p className="text-xs font-bold text-teal-100">
+                  🎤 โค้ชเสียงฟังแล้วว่า
+                  <span className="ml-1 font-normal text-teal-200/70">
+                    (คำแนะนำอย่างเดียว ไม่มีผลต่อคะแนน)
+                  </span>
+                </p>
+                {critique.audible ? (
+                  <>
+                    <p className="text-xs leading-relaxed text-teal-50">{critique.summary}</p>
+                    {critique.strengths.map((s, i) => (
+                      <p key={`s${i}`} className="text-[11px] leading-relaxed text-teal-100">
+                        ✓ {s}
+                      </p>
+                    ))}
+                    {critique.improvements.map((s, i) => (
+                      <p key={`i${i}`} className="text-[11px] leading-relaxed text-amber-100">
+                        → {s}
+                      </p>
+                    ))}
+                    {critique.technique ? (
+                      <p className="border-t border-white/10 pt-1.5 text-[11px] leading-relaxed text-slate-300">
+                        <b className="text-slate-200">จุดที่หูคนทั่วไปมักไม่ทัน:</b>{" "}
+                        {critique.technique}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-xs leading-relaxed text-amber-100">
+                    {critique.summary || "เสียงเบาเกินไปจนประเมินไม่ได้"}
+                  </p>
+                )}
+              </div>
+            ) : critiqueState === "failed" ? (
+              <p className="mt-3 rounded-lg border border-white/10 px-3 py-2 text-[11px] text-slate-500">
+                ไม่ได้ฟีดแบ็กจากโค้ชรอบนี้ — {critiqueReason}
               </p>
             ) : null}
 

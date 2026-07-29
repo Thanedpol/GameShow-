@@ -352,7 +352,7 @@ export default function SetupScreen() {
             <span>
               คำถามมีทั้ง <b className="text-white">ปรนัย</b>,{" "}
               <b className="text-white">อัตนัย</b> (พิมพ์ตอบ ให้ AI ตรวจตามเกณฑ์) และ{" "}
-              <b className="text-white">โชว์ความสามารถ</b> (ร้อง/พูด แล้วให้คนอื่นกดดาว)
+              <b className="text-white">โชว์ความสามารถ</b> (ร้อง/พูด/พิตช์ แล้วพิมพ์สรุปให้ AI ตรวจ)
             </span>
           </li>
           <li className="flex gap-2">
