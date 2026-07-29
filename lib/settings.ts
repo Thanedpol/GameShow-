@@ -161,13 +161,74 @@ export type LlmProviderChoice =
   | "openrouter"
   | "ollama";
 
+/**
+ * งานแต่ละอย่างในเกมที่ต้องเรียกโมเดล
+ *
+ * แยกกันเพราะความต้องการต่างกันมาก — คำใบ้ถูกเรียก 4 ครั้งต่อข้อ (สูงสุดในเกม)
+ * แต่ต้องการแค่ประโยคสั้น ๆ ส่วนการตรวจคำตอบอัตนัยเรียกไม่กี่ครั้งแต่ต้องแม่น
+ * การบังคับให้ใช้โมเดลเดียวกันหมดแปลว่าต้องยอมจ่ายแพงทั้งกระดาน
+ * หรือไม่ก็ยอมให้ของที่สำคัญที่สุดคุณภาพตก
+ */
+export type LlmTask = "questions" | "hint" | "grade" | "debrief" | "image" | "voice";
+
+export const LLM_TASKS: LlmTask[] = [
+  "questions",
+  "hint",
+  "grade",
+  "debrief",
+  "image",
+  "voice",
+];
+
+export const LLM_TASK_INFO: Record<
+  LlmTask,
+  { label: string; detail: string; kind: "text" | "image" | "audio" }
+> = {
+  questions: {
+    label: "แต่งคำถาม",
+    detail: "อ่านข่าวจริงแล้วเขียนคำถามพร้อมคำใบ้ — ต้องแม่นเรื่องเฉลย",
+    kind: "text",
+  },
+  hint: {
+    label: "เขียนคำใบ้",
+    detail: "เรียกมากสุดในเกม 4 ครั้งต่อข้อ แต่ได้ประโยคสั้น ๆ",
+    kind: "text",
+  },
+  grade: {
+    label: "ตรวจคำตอบอัตนัย",
+    detail: "ให้คะแนนตาม rubric — จุดที่ผู้เล่นรู้สึกได้ทันทีถ้าตัดสินมั่ว",
+    kind: "text",
+  },
+  debrief: {
+    label: "สรุปผลท้ายเกม",
+    detail: "อธิบายว่ากล่องแต่ละกล่องออกแบบแบบนั้นเพราะอะไร เรียกครั้งเดียว",
+    kind: "text",
+  },
+  image: {
+    label: "สร้างภาพโจทย์",
+    detail: "วาดภาพให้โจทย์หาจุดผิด — ตัวที่แพงที่สุดต่อครั้ง",
+    kind: "image",
+  },
+  voice: {
+    label: "ฟังเสียงร้อง",
+    detail: "ฟังคลิปที่ผู้เล่นร้องแล้วให้ฟีดแบ็ก ต้องเป็นโมเดลที่รับไฟล์เสียงได้",
+    kind: "audio",
+  },
+};
+
 export interface LlmSettings {
   provider: LlmProviderChoice;
   /** เว้นว่าง = ให้เซิร์ฟเวอร์เลือกโมเดลตั้งต้นของเจ้านั้นเอง */
   model: string;
+  /** โมเดลเฉพาะของแต่ละงาน — ไม่ได้ตั้ง = ใช้ `model` ด้านบน */
+  taskModels: Partial<Record<LlmTask, string>>;
 }
 
-export const DEFAULT_LLM_SETTINGS: LlmSettings = { provider: "auto", model: "" };
+export const DEFAULT_LLM_SETTINGS: LlmSettings = {
+  provider: "auto",
+  model: "",
+  taskModels: {},
+};
 
 const PROVIDER_CHOICES: LlmProviderChoice[] = [
   "auto",
@@ -187,7 +248,22 @@ export function normalizeLlmSettings(raw: Partial<LlmSettings> | null): LlmSetti
     ? (raw.provider as LlmProviderChoice)
     : "auto";
   const model = typeof raw.model === "string" ? raw.model.trim() : "";
-  return { provider, model: MODEL_PATTERN.test(model) ? model : "" };
+
+  const taskModels: Partial<Record<LlmTask, string>> = {};
+  const rawTasks = (raw.taskModels ?? {}) as Record<string, unknown>;
+  for (const task of LLM_TASKS) {
+    const value = rawTasks[task];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (MODEL_PATTERN.test(trimmed)) taskModels[task] = trimmed;
+  }
+
+  return { provider, model: MODEL_PATTERN.test(model) ? model : "", taskModels };
+}
+
+/** โมเดลที่จะใช้จริงกับงานนั้น — ไม่ได้ตั้งเฉพาะทางก็ใช้ตัวหลัก */
+export function modelForTask(settings: LlmSettings, task: LlmTask): string {
+  return settings.taskModels[task] || settings.model;
 }
 
 export function loadLlmSettings(): LlmSettings {
@@ -311,10 +387,12 @@ export function explicitLlmPayload(
   };
 }
 
-export function llmRequestPayload():
-  | { provider?: string; model?: string; apiKey?: string }
-  | undefined {
-  const { provider, model } = loadLlmSettings();
+export function llmRequestPayload(
+  task?: LlmTask,
+): { provider?: string; model?: string; apiKey?: string } | undefined {
+  const settings = loadLlmSettings();
+  const { provider } = settings;
+  const model = task ? modelForTask(settings, task) : settings.model;
   const apiKey = isKeyedProvider(provider) ? loadApiKeys()[provider] : undefined;
   if (provider === "auto" && !model) return undefined;
   return {

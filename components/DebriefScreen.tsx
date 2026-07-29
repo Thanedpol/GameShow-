@@ -29,7 +29,7 @@ export default function DebriefScreen() {
           body: JSON.stringify({
             participants: state.participants.map((p) => ({ name: p.name, score: p.score })),
             hintHistory: state.hintHistory,
-            llm: llmRequestPayload(),
+            llm: llmRequestPayload("debrief"),
           }),
         });
         if (!res.ok) throw new Error(String(res.status));

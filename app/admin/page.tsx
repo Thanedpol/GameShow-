@@ -11,6 +11,8 @@ import {
   FEED_GROUP_CHOICES,
   FEED_GROUP_TH,
   KEYED_PROVIDERS,
+  LLM_TASKS,
+  LLM_TASK_INFO,
   clearApiKey,
   explicitLlmPayload,
   llmRequestPayload,
@@ -33,6 +35,7 @@ import {
   type KeyedProvider,
   type LlmProviderChoice,
   type LlmSettings,
+  type LlmTask,
   type QuestionSource,
 } from "@/lib/settings";
 import type { AdminConfigResponse } from "@/app/api/admin/config/route";
@@ -999,6 +1002,22 @@ const SUGGESTED_MODELS: Record<string, Array<{ id: string; tag: string }>> = {
 /** จำนวนปุ่มโมเดลที่แสดงพร้อมกันตอนโหลดรายชื่อเต็ม กัน DOM บวมตอนมี 300+ ตัว */
 const MODEL_PAGE_SIZE = 40;
 
+/**
+ * โมเดลแนะนำของแต่ละงาน — ตัวเลขราคาจาก ai.google.dev/gemini-api/docs/pricing
+ * เรียงจากถูกไปแพง เพื่อให้เห็นว่าจ่ายเพิ่มแล้วได้อะไร
+ *
+ * ที่ต้องมีลิสต์แยกจาก SUGGESTED_MODELS เพราะงานภาพกับงานเสียงใช้โมเดลคนละตระกูล
+ * ใส่ชื่อโมเดลข้อความลงช่องภาพแล้วจะไม่มีภาพกลับมาเลย
+ */
+const TASK_SUGGESTIONS: Record<LlmTask, string[]> = {
+  questions: ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"],
+  hint: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash-lite"],
+  grade: ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash"],
+  debrief: ["gemini-2.5-flash-lite", "gemini-2.5-flash"],
+  image: ["gemini-3.1-flash-lite-image", "gemini-3.1-flash-image", "gemini-3-pro-image"],
+  voice: ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash"],
+};
+
 function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [cfg, setCfg] = useState<AdminConfigResponse | null>(null);
   const [password, setPassword] = useState("");
@@ -1105,8 +1124,9 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   }
 
   function handleProvider(value: LlmProviderChoice) {
-    // โมเดลของคนละเจ้าใช้ชื่อคนละแบบ เปลี่ยนเจ้าแล้วต้องล้างโมเดลเดิมทิ้ง
-    setLlm({ provider: value, model: "" });
+    // โมเดลของคนละเจ้าใช้ชื่อคนละแบบ เปลี่ยนเจ้าแล้วต้องล้างของเดิมทิ้งให้หมด
+    // รวมถึงโมเดลรายงานด้วย ไม่งั้นจะเหลือชื่อของค่ายเก่าค้างอยู่แล้วเรียกไม่ได้
+    setLlm({ provider: value, model: "", taskModels: {} });
     setCustomModel("");
     setModels([]);
     setModelQuery("");
@@ -1499,6 +1519,89 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
             </div>
           ) : null}
         </div>
+
+        {/* ══ โมเดลแยกตามงาน ═══════════════════════════════════════════ */}
+        <details className="rounded-xl border border-stage-edge bg-white/[0.02] p-3">
+          <summary className="cursor-pointer text-xs font-bold text-slate-200">
+            🎛️ เลือกโมเดลแยกตามงาน{" "}
+            <span className="font-normal text-slate-500">
+              ({Object.keys(llm.taskModels).length > 0
+                ? `ตั้งไว้ ${Object.keys(llm.taskModels).length} งาน`
+                : `ใช้ ${llm.model || "ค่าตั้งต้น"} ทั้งหมด`}
+              )
+            </span>
+          </summary>
+
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+            เว้นว่าง = ใช้โมเดลหลักด้านบน · งานที่ต้องแม่น (แต่งคำถาม / ตรวจคำตอบ)
+            ควรใช้ตัวที่เก่งกว่า ส่วนงานที่เรียกถี่แต่ได้ข้อความสั้น (คำใบ้)
+            ใช้ตัวถูกได้ · ช่องภาพและเสียงต้องใส่ชื่อโมเดลคนละตระกูลกับข้อความ
+          </p>
+
+          <div className="mt-3 space-y-2.5">
+            {LLM_TASKS.map((task) => {
+              const info = LLM_TASK_INFO[task];
+              const suggestion = TASK_SUGGESTIONS[task];
+              return (
+                <div key={task} className="rounded-lg border border-stage-edge/70 p-2.5">
+                  <div className="flex flex-wrap items-baseline justify-between gap-1">
+                    <span className="text-[11px] font-bold text-sky-200">{info.label}</span>
+                    <span className="text-[10px] text-slate-500">{info.detail}</span>
+                  </div>
+                  <input
+                    value={llm.taskModels[task] ?? ""}
+                    onChange={(e) => {
+                      const next = { ...llm.taskModels };
+                      const v = e.target.value.trim();
+                      if (v) next[task] = v;
+                      else delete next[task];
+                      setLlm({ ...llm, taskModels: next });
+                      setTestResult(null);
+                    }}
+                    placeholder={
+                      info.kind === "text"
+                        ? llm.model || "ใช้โมเดลหลัก"
+                        : `แนะนำ ${suggestion[0]}`
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="field mt-1.5 py-1.5 font-mono text-[11px]"
+                  />
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {suggestion.map((id) => (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setLlm({ ...llm, taskModels: { ...llm.taskModels, [task]: id } });
+                          setTestResult(null);
+                        }}
+                        className={`rounded border px-1.5 py-0.5 font-mono text-[9px] transition ${
+                          llm.taskModels[task] === id
+                            ? "border-sky-400 bg-sky-500/20 text-white"
+                            : "border-stage-edge bg-white/[0.03] text-slate-400 hover:bg-white/[0.08]"
+                        }`}
+                      >
+                        {id}
+                      </button>
+                    ))}
+                    {llm.taskModels[task] ? (
+                      <button
+                        onClick={() => {
+                          const next = { ...llm.taskModels };
+                          delete next[task];
+                          setLlm({ ...llm, taskModels: next });
+                        }}
+                        className="rounded border border-stage-edge px-1.5 py-0.5 text-[9px] text-slate-500 hover:text-slate-300"
+                      >
+                        ล้าง
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </details>
 
         {/* แถบล่าง: สถานะซ้าย ปุ่มขวา */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">

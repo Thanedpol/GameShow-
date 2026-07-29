@@ -55,6 +55,8 @@ function settingsKey(settings: GameSettings): string {
     settings.feedGroups,
     llm.provider,
     llm.model,
+    // เปลี่ยนโมเดลของงาน "แต่งคำถาม" แล้วชุดที่เตรียมไว้ต้องถูกทิ้ง
+    llm.taskModels.questions,
   ]);
 }
 
@@ -100,7 +102,7 @@ async function requestLive(settings: GameSettings): Promise<PreparedSet> {
       stages,
       groups: settings.feedGroups,
       avoid: recentTopics(40),
-      llm: llmRequestPayload(),
+      llm: llmRequestPayload("questions"),
     }),
   });
   if (!res.ok) throw new Error(String(res.status));
