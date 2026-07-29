@@ -1,10 +1,8 @@
+import { POINTS } from "./questionPoints";
+import { EXTRA_QUESTIONS } from "./questionsExtra";
 import type { Question, Stage } from "./types";
 
-export const POINTS: Record<Stage, number> = {
-  warmup: 100,
-  push: 200,
-  final: 300,
-};
+export { POINTS };
 
 /**
  * คลังคำถามตั้งต้น — ผสม 3 รูปแบบ (ปรนัย / อัตนัย / โชว์ความสามารถ)
@@ -15,7 +13,7 @@ export const POINTS: Record<Stage, number> = {
  *   fake = ท่อนแรกจริง ท่อนหลังฟังดูน่าเชื่อแต่ผิด (ไม่อ้างแหล่งปลอม)
  * น้ำเสียงเป็นกันเอง สั้น ให้เห็นภาพ แต่ให้ทีละนิดเดียว
  */
-export const QUESTION_BANK: Question[] = [
+const CORE_QUESTIONS: Question[] = [
   // ══════════════ WARM-UP ══════════════
   {
     id: "w-scam-01",
@@ -642,6 +640,14 @@ export const QUESTION_BANK: Question[] = [
     },
   },
 ];
+
+/**
+ * คลังเต็ม 60 ข้อ = ชุดหลัก 20 + ส่วนขยาย 40
+ *
+ * ใช้เป็นตัวสำรองเมื่อไม่มีคีย์ AI เน็ตล่ม หรือหลังบ้านเลือกโหมด "ใช้คลังในเครื่อง"
+ * ปกติเกมจะแต่งคำถามสดจากข่าวจริงแทน (ดู lib/questionGen.ts)
+ */
+export const QUESTION_BANK: Question[] = [...CORE_QUESTIONS, ...EXTRA_QUESTIONS];
 
 export function getQuestionById(id: string): Question | undefined {
   return QUESTION_BANK.find((q) => q.id === id);
