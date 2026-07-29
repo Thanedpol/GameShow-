@@ -558,6 +558,32 @@ export default function QuestionScreen() {
         </section>
       ) : null}
 
+      {/* ── คำใบ้ที่เปิดไว้ — ค้างบนจอจนจบข้อ ──────────────────────────────
+          ผู้เล่นจ่ายคะแนนไปแล้วเพื่อเปิดกล่องนี้ ถ้ามันหายไปตอนกดตอบ
+          ก็เท่ากับจ่ายแล้วอ่านไม่ทัน ตรงนี้จึงต้องอยู่ต่อจนกว่าจะขึ้นเฉลย
+          (ตอนกำลังตอบอยู่ กริดด้านบนแสดงให้แล้ว ไม่ต้องซ้ำ) */}
+      {openedBoxes.length > 0 &&
+      phase !== "answering" &&
+      phase !== "performing" &&
+      !(phase === "result" && revealed) ? (
+        <section className="space-y-2">
+          <h3 className="text-sm font-bold text-slate-200">คำใบ้ที่เปิดไว้</h3>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {openedBoxes.map((b) => (
+              <div
+                key={b.id}
+                className="rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
+              >
+                <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                  กล่อง {b.label}
+                </span>
+                <p className="mt-1.5 text-xs leading-relaxed text-white">{b.text}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* ── ข้อเสนอจากเพื่อนร่วมทีมที่ใช้อีกเครื่อง ─────────────────────── */}
       {phase === "answering" || phase === "performing" ? (
         <TeammateNotes questionId={question.id} />

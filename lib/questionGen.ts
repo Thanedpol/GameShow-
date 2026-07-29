@@ -373,6 +373,8 @@ export interface GenerateResult {
   shortfall: Record<string, number>;
   sourcesUsed: string[];
   feedsFailed: string[];
+  /** สาเหตุจริงที่เรียกโมเดลไม่สำเร็จ — เอาไปแสดงในหลังบ้าน */
+  errors: string[];
 }
 
 /** ขอเกินโควตาไว้ เพราะ validateQuestion() ตัดทิ้งได้เสมอ */
@@ -421,13 +423,18 @@ function rotate<T>(list: T[], by: number): T[] {
 
 export async function generateQuestions(options: GenerateOptions): Promise<GenerateResult> {
   const choice = resolveLlm(options.llm);
+  const errors: string[] = [];
   const empty: GenerateResult = {
     questions: [],
     shortfall: Object.fromEntries(options.stages.map((s) => [s.stage, s.count])),
     sourcesUsed: [],
     feedsFailed: [],
+    errors,
   };
-  if (!isChoiceReady(choice)) return empty;
+  if (!isChoiceReady(choice)) {
+    errors.push(`ยังไม่มีคีย์ของ ${choice.provider} ให้ใช้ — ไปใส่ที่แท็บ API ก่อน`);
+    return empty;
+  }
 
   const totalWanted = options.stages.reduce((sum, s) => sum + s.count, 0);
   const news = await harvest(options.groups, {
@@ -436,7 +443,13 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
     maxFeeds: 18,
   });
   // ไม่มีข่าวเลย = เน็ตล่มหรือฟีดตายหมด ปล่อยให้ตัวเรียกไปใช้คลังในเครื่องแทน
-  if (news.items.length < 6) return { ...empty, feedsFailed: news.failed };
+  if (news.items.length < 6) {
+    errors.push(
+      `ดึงข่าวได้แค่ ${news.items.length} ชิ้น ไม่พอจะตั้งคำถาม ` +
+        `(ฟีดที่ล้ม: ${news.failed.slice(0, 3).join(", ") || "—"})`,
+    );
+    return { ...empty, feedsFailed: news.failed };
+  }
 
   const chunks = planChunks(options.stages);
   const results = await Promise.all(
@@ -462,6 +475,7 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
         // คำถามพร้อมคำใบ้ 6 อันต่อข้อกินโทเคนเยอะ เผื่อไว้มากกว่างานอื่น
         maxTokens: 8_000,
         tag: `questions:${chunk.stage}#${chunk.index}`,
+        errorSink: errors,
         timeoutMs: 50_000,
       });
 
@@ -498,5 +512,7 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
     shortfall,
     sourcesUsed: news.ok,
     feedsFailed: news.failed,
+    // ตัดให้เหลือไม่กี่บรรทัด — ทุกก้อนที่พังมักพังด้วยเหตุผลเดียวกัน
+    errors: [...new Set(errors)].slice(0, 3),
   };
 }

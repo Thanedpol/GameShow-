@@ -285,6 +285,32 @@ const isKeyedProvider = (value: string): value is KeyedProvider =>
  * คีย์จะถูกแนบเฉพาะตอนที่เลือกค่ายไว้ชัดเจนแล้วเท่านั้น — ตอนเป็น "auto"
  * ฝั่ง client ไม่รู้ว่าเซิร์ฟเวอร์ตั้งค่ายอะไรไว้ จึงไม่รู้ว่าจะส่งคีย์ของใคร
  */
+/**
+ * ก้อน llm ที่ระบุค่าชัดเจนเสมอ ไม่ปล่อยให้เป็น undefined
+ *
+ * ใช้ในหลังบ้านตอนกด "ลองสร้างดู" — ต่างจาก llmRequestPayload() ตรงที่ตัวนั้น
+ * คืน undefined เมื่อยังเป็น "ตามเซิร์ฟเวอร์" แล้วเซิร์ฟเวอร์จะไปหยิบ HINT_MODEL
+ * ของ env มาใช้ ซึ่งอาจเป็นโมเดลที่ถูกปลดระวางไปแล้ว (เคยเจอกับ gemini-2.0-flash)
+ * ผลคือกดปุ่มแล้วพังโดยที่หน้าจอยังโชว์ว่าตั้งค่าถูกอยู่
+ *
+ * ต้องส่ง serverProvider/serverModel จาก /api/admin/config เข้ามา เพราะฝั่ง client
+ * ไม่รู้ว่า env ของเซิร์ฟเวอร์ตั้งอะไรไว้
+ */
+export function explicitLlmPayload(
+  serverProvider?: string,
+  serverModel?: string,
+): { provider: string; model?: string; apiKey?: string } {
+  const { provider, model } = loadLlmSettings();
+  const effective = provider === "auto" ? (serverProvider ?? "anthropic") : provider;
+  const apiKey = isKeyedProvider(effective) ? loadApiKeys()[effective] : undefined;
+  return {
+    provider: effective,
+    // ล็อกค่ายเองแล้วแต่ไม่ได้เลือกโมเดล = ให้เซิร์ฟเวอร์เลือกดีฟอลต์ของค่ายนั้น
+    model: model || (provider === "auto" ? serverModel || undefined : undefined),
+    apiKey,
+  };
+}
+
 export function llmRequestPayload():
   | { provider?: string; model?: string; apiKey?: string }
   | undefined {

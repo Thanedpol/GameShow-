@@ -12,6 +12,7 @@ import {
   FEED_GROUP_TH,
   KEYED_PROVIDERS,
   clearApiKey,
+  explicitLlmPayload,
   llmRequestPayload,
   isUsingCustomQuestions,
   isValidApiKey,
@@ -550,6 +551,8 @@ function QuestionEditor({
 interface TrialResult {
   ok: boolean;
   message: string;
+  /** สาเหตุจริงจากเซิร์ฟเวอร์ — ต้องเห็นบนหน้าจอ เพราะบน Vercel เปิด log ดูไม่ได้ */
+  detail: string[];
   questions: Question[];
 }
 
@@ -558,10 +561,20 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [seenTotal, setSeenTotal] = useState(0);
   const [trying, setTrying] = useState(false);
   const [trial, setTrial] = useState<TrialResult | null>(null);
+  // ต้องรู้ว่า env ของเซิร์ฟเวอร์ตั้งค่ายอะไรไว้ ถึงจะระบุค่าที่จะทดสอบได้ชัด
+  const [cfg, setCfg] = useState<AdminConfigResponse | null>(null);
 
   useEffect(() => {
     setS(loadSettings());
     setSeenTotal(seenCount());
+    void (async () => {
+      try {
+        const res = await fetch("/api/admin/config");
+        setCfg((await res.json()) as AdminConfigResponse);
+      } catch {
+        setCfg(null);
+      }
+    })();
   }, []);
 
   /**
@@ -571,6 +584,8 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
   async function handleTrySource() {
     setTrying(true);
     setTrial(null);
+    // ระบุค่ายและโมเดลที่จะใช้ให้ชัด ไม่ปล่อยให้เซิร์ฟเวอร์ไปหยิบ env มาเดาเอง
+    const llm = explicitLlmPayload(cfg?.serverProvider, cfg?.serverModel);
     try {
       const res = await fetch("/api/questions", {
         method: "POST",
@@ -579,26 +594,28 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
           stages: [{ stage: "warmup", count: 3, pointValue: s.points.warmup }],
           groups: s.feedGroups,
           avoid: recentTopics(20),
-          llm: llmRequestPayload(),
+          llm,
         }),
       });
       const data = (await res.json()) as {
         questions?: Question[];
-        source?: string;
         sourcesUsed?: string[];
+        errors?: string[];
+        error?: string;
       };
       const questions = data.questions ?? [];
+      const using = `${llm.provider}${llm.model ? ` · ${llm.model}` : ""}`;
       setTrial({
         ok: questions.length > 0,
         message:
           questions.length > 0
-            ? `สร้างได้ ${questions.length} ข้อ จากข่าว ${data.sourcesUsed?.length ?? 0} สำนัก`
-            : "สร้างไม่สำเร็จ — เช็กว่าตั้งคีย์และโมเดลในแท็บ API ถูกต้องแล้ว " +
-              "(ดูสาเหตุจริงได้ใน log ของเซิร์ฟเวอร์) ตอนนี้เกมจะใช้คลังในเครื่องแทน",
+            ? `สร้างได้ ${questions.length} ข้อ จากข่าว ${data.sourcesUsed?.length ?? 0} สำนัก (ใช้ ${using})`
+            : `สร้างไม่สำเร็จด้วย ${using}`,
+        detail: questions.length > 0 ? [] : (data.errors ?? [data.error ?? "ไม่ทราบสาเหตุ"]),
         questions,
       });
     } catch (e) {
-      setTrial({ ok: false, message: `เรียกไม่สำเร็จ — ${String(e)}`, questions: [] });
+      setTrial({ ok: false, message: "เรียกไม่สำเร็จ", detail: [String(e)], questions: [] });
     } finally {
       setTrying(false);
     }
@@ -683,10 +700,11 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
             <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
               <button
                 onClick={() => void handleTrySource()}
-                disabled={trying}
-                className="btn-ghost px-4 py-2 text-xs"
+                // ต้องรอให้รู้ค่าของเซิร์ฟเวอร์ก่อน ไม่งั้นจะเดาค่ายผิดแล้วรายงานผิดจุด
+                disabled={trying || !cfg}
+                className="btn-ghost px-4 py-2 text-xs disabled:opacity-50"
               >
-                {trying ? "กำลังลอง..." : "ลองสร้างดู 3 ข้อ"}
+                {trying ? "กำลังลอง..." : !cfg ? "กำลังอ่านค่า..." : "ลองสร้างดู 3 ข้อ"}
               </button>
               <span className="text-[11px] text-slate-500">
                 จำคำถามที่เคยเล่นไว้ {seenTotal} ข้อ
@@ -713,6 +731,11 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                 }`}
               >
                 <p className="font-semibold">{trial.message}</p>
+                {trial.detail.map((d, i) => (
+                  <p key={i} className="font-mono text-[10px] leading-relaxed opacity-90">
+                    {d}
+                  </p>
+                ))}
                 {trial.questions.map((q) => (
                   <p key={q.id} className="text-slate-200">
                     <span className="text-sky-300">[{q.format}]</span> {q.prompt}

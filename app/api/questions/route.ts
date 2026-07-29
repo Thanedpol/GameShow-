@@ -42,6 +42,12 @@ export interface QuestionsApiResponse {
   /** ชื่อสำนักข่าวที่ดึงมาได้จริง ใช้โชว์ในหลังบ้านตอนไล่ปัญหา */
   sourcesUsed: string[];
   feedsFailed: string[];
+  /**
+   * สาเหตุจริงที่สร้างไม่สำเร็จ — ว่างแปลว่าไม่มีปัญหา
+   * ส่งกลับมาเพราะบน Vercel ผู้ใช้เปิด log ดูไม่ได้ ถ้าไม่บอกก็ได้แต่เดา
+   * (เป็นข้อความ error ของผู้ให้บริการ ไม่มีคีย์ปนอยู่)
+   */
+  errors: string[];
 }
 
 function parseStages(input: RequestBody["stages"]): StageRequest[] {
@@ -107,6 +113,7 @@ export async function POST(request: NextRequest) {
       source: result.questions.length > 0 ? "llm" : "fallback",
       sourcesUsed: result.sourcesUsed,
       feedsFailed: result.feedsFailed,
+      errors: result.errors,
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
@@ -119,6 +126,7 @@ export async function POST(request: NextRequest) {
       source: "fallback",
       sourcesUsed: [],
       feedsFailed: [],
+      errors: [String(error).slice(0, 200)],
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
   }

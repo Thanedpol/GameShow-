@@ -165,13 +165,46 @@ export function sanitizeApiKey(value: unknown): string | null {
   return API_KEY_PATTERN.test(trimmed) ? trimmed : null;
 }
 
+/**
+ * โมเดลที่ผู้ให้บริการปลดระวางไปแล้ว → ชื่อที่ควรใช้แทน
+ *
+ * มีไว้เพราะเคยเจอของจริง: `HINT_MODEL=gemini-2.0-flash` ที่ตั้งไว้บน Vercel
+ * กลายเป็น 404 หลัง Google ปิดรุ่นนั้น แล้วเกมตกไปโหมดสำรอง "เงียบ ๆ" ทุกครั้ง
+ * โดยหน้าหลังบ้านยังโชว์ว่าตั้งค่าถูกอยู่ — กว่าจะรู้ก็ต่อเมื่อไล่อ่าน log
+ *
+ * การเปลี่ยนชื่อให้อัตโนมัติดีกว่าปล่อยพัง แต่ต้องเตือนใน log ด้วย
+ * ไม่งั้นค่าที่ตั้งไว้กับค่าที่ใช้จริงจะไม่ตรงกันโดยไม่มีใครรู้
+ */
+const RETIRED_MODELS: Record<string, string> = {
+  "gemini-2.0-flash": "gemini-flash-latest",
+  "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+  "gemini-1.5-flash": "gemini-flash-latest",
+  "gemini-1.5-pro": "gemini-2.5-pro",
+};
+
+const warnedRetired = new Set<string>();
+
+export function replaceRetiredModel(model: string): string {
+  const replacement = RETIRED_MODELS[model];
+  if (!replacement) return model;
+  if (!warnedRetired.has(model)) {
+    warnedRetired.add(model);
+    console.warn(
+      `[llm] โมเดล ${model} ถูกปลดระวางแล้ว — ใช้ ${replacement} แทนให้ชั่วคราว ` +
+        `ควรแก้ HINT_MODEL หรือค่าที่เลือกในหลังบ้านให้ตรง`,
+    );
+  }
+  return replacement;
+}
+
 /** ค่าตั้งต้นจาก env — ใช้เมื่อ client ไม่ได้ส่งอะไรมา */
 export function envChoice(): LlmChoice {
   const raw = readEnvLoose("LLM_PROVIDER")?.toLowerCase();
   const provider = isProvider(raw) ? raw : "anthropic";
+  const model = sanitizeModel(readEnvLoose("HINT_MODEL"));
   return {
     provider,
-    model: sanitizeModel(readEnvLoose("HINT_MODEL")) ?? DEFAULT_MODEL[provider],
+    model: model ? replaceRetiredModel(model) : DEFAULT_MODEL[provider],
   };
 }
 
@@ -188,7 +221,9 @@ export function resolveLlm(input?: LlmChoiceInput | null): LlmChoice {
   const provider = isProvider(input.provider) ? input.provider : fromEnv.provider;
   const apiKey = sanitizeApiKey(input.apiKey) ?? undefined;
   const model = sanitizeModel(input.model);
-  if (model) return { provider, model, apiKey };
+  // แทนที่โมเดลที่ถูกปลดระวางด้วย ไม่ใช่แค่ตอนอ่านจาก env
+  // เพราะค่าที่เลือกไว้ในหลังบ้านก็ค้างอยู่ใน localStorage ได้เหมือนกัน
+  if (model) return { provider, model: replaceRetiredModel(model), apiKey };
 
   return {
     provider,
@@ -330,6 +365,14 @@ export interface LlmJsonOptions {
   /** ใช้ในบรรทัด log เวลาพัง จะได้รู้ว่ามาจากจุดไหน */
   tag: string;
   timeoutMs?: number;
+  /**
+   * ที่รองเก็บสาเหตุที่เรียกไม่สำเร็จ
+   *
+   * ปกติฟังก์ชันนี้กลืน error แล้วคืน null เพื่อให้เกมตกไปโหมดสำรองได้เงียบ ๆ
+   * แต่หน้าหลังบ้านต้องบอกผู้ใช้ให้ได้ว่าพังเพราะอะไร — บน Vercel เปิดดู log
+   * ไม่ได้ง่าย ๆ ถ้าไม่ส่งสาเหตุกลับไปก็ได้แต่เดา
+   */
+  errorSink?: string[];
 }
 
 export async function callLlmJson<T>(
@@ -352,7 +395,9 @@ export async function callLlmJson<T>(
     }
     return await callOllamaJson<T>(choice.model, options, timeoutMs);
   } catch (error) {
-    console.error(`[${options.tag}] เรียก ${choice.provider} ไม่สำเร็จ:`, describeError(error));
+    const detail = describeError(error);
+    console.error(`[${options.tag}] เรียก ${choice.provider} ไม่สำเร็จ:`, detail);
+    options.errorSink?.push(`${choice.provider}/${choice.model}: ${detail}`);
     return null;
   }
 }
