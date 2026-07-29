@@ -1,0 +1,502 @@
+import "server-only";
+
+import { SHARED_RULES } from "./hintEngine";
+import { callLlmJson, isChoiceReady, resolveLlm, type LlmChoiceInput } from "./llm";
+import { drawPerformanceTasks, drawSeeds, type QuestionSeed } from "./questionSeeds";
+import { harvest, type FeedGroup, type NewsItem } from "./sources";
+import type { Category, Difficulty, Question, QuestionFormat, Stage } from "./types";
+
+/**
+ * ตัวแต่งคำถามสดจากข่าวจริง
+ *
+ * ทำไมไม่ปล่อยให้โมเดลนึกคำถามเอาเอง: โมเดลจะวนอยู่กับความรู้ยอดนิยมในหัวมันเอง
+ * ถามซ้ำเรื่องเดิม ๆ และไม่มีทางรู้ว่าอะไรเพิ่งเกิดขึ้น การป้อนข่าวจริงเข้าไป
+ * ทำให้คำถามเปลี่ยนตามโลกจริงทุกวันโดยไม่ต้องแก้โค้ด
+ *
+ * ทำไมยังต้องมีตัวตรวจฝั่งเรา: โมเดลแต่งเฉลยผิดได้ ปรนัยที่เฉลยผิดคือของเสีย
+ * ที่ผู้เล่นจับได้ทันที ทุกข้อจึงต้องผ่าน validateQuestion() ก่อนถึงมือผู้เล่น
+ */
+
+const CATEGORIES: Category[] = [
+  "สแกม",
+  "การเงิน",
+  "AI",
+  "สุขภาพ",
+  "ที่ทำงาน",
+  "ชีวิตจริง",
+  "สื่อสาร",
+  "ตรรกะ",
+];
+
+const DIFFICULTIES: Difficulty[] = ["ง่าย", "กลาง", "ยาก"];
+
+// ────────────────────────────────────────────────────────────────────────────
+// Prompt
+// ────────────────────────────────────────────────────────────────────────────
+
+const SYSTEM = `
+คุณคือคนเขียนคำถามของเกมโชว์ไทย "ใบ้จริง...ใบ้หลอก"
+
+หน้าที่: แต่งคำถามใหม่จากข่าว/บทความจริงที่ได้รับมา พร้อมคำใบ้จริงและคำใบ้หลอกของแต่ละข้อ
+
+หัวใจของคำถามที่ดีในเกมนี้:
+- ต้องพาผู้เล่นไปเจอ "ปัญหาชีวิตจริงหรือโลกการทำงาน" ที่เอาไปใช้ต่อได้จริง
+  ไม่ใช่คำถามความจำแบบท่องจำว่าใครทำอะไรที่ไหนเมื่อไหร่
+- ผู้เล่นที่ไม่เคยอ่านข่าวชิ้นนั้นก็ต้องตอบได้ ถ้าคิดเป็น — ข่าวเป็นแค่ "ที่มา"
+  ของประเด็น ไม่ใช่ตัวข้อสอบวัดว่าอ่านข่าวหรือยัง
+- ห้ามถามเรื่องที่ต้องรู้ชื่อบริษัท ตัวเลข หรือวันที่เฉพาะจากข่าวชิ้นนั้น
+
+ข้อห้ามเรื่องแหล่งที่มา (สำคัญ):
+- ห้ามคัดลอกข้อความจากข่าวมาตรง ๆ ให้เขียนขึ้นใหม่ด้วยคำของตัวเองเสมอ
+- ถ้าโจทย์ให้ "อ่านออกเสียง" ต้องเขียนย่อหน้านั้นขึ้นใหม่เอง ห้ามวางเนื้อข่าวต้นฉบับ
+- ห้ามเอ่ยชื่อบุคคลจริงในลักษณะที่ทำให้เข้าใจผิดเกี่ยวกับตัวเขา
+
+ข้อห้ามเรื่องเนื้อหา:
+- ห้ามแตะเรื่องความรุนแรง ความตาย ภัยพิบัติ คดีความ การเมือง ศาสนา หรือความขัดแย้งระหว่างประเทศ
+  ถ้าข่าวชิ้นไหนเป็นแนวนั้น ให้ข้ามไปใช้ชิ้นอื่น
+- ห้ามให้คำแนะนำทางการแพทย์ กฎหมาย หรือการเงินที่เฉพาะเจาะจงจนคนเอาไปทำตามแล้วเสียหาย
+
+รูปแบบคำถามมี 3 แบบ:
+  choice      = ปรนัย 4 ตัวเลือก มีคำตอบถูก 1 ข้อ
+  open        = อัตนัย ผู้เล่นพิมพ์ตอบเป็นข้อความ แล้วมีคนตรวจตาม rubric
+  performance = โชว์ความสามารถสด ๆ บนเวที (พูด เล่า ร้อง พิตช์) ให้คนอื่นกดดาว
+
+กติกาของแต่ละแบบ:
+- choice: ตัวเลือกทั้ง 4 ต้องดูน่าเชื่อพอกัน ความยาวใกล้เคียงกัน ห้ามมีข้อไหนยาวผิดปกติ
+  หรือใช้คำอย่าง "ทั้งหมดที่กล่าวมา" ที่เดาได้ทันที · correctAnswer ต้องตรงกับข้อความ
+  ในตัวเลือกข้อหนึ่งแบบเป๊ะทุกตัวอักษร
+- open: ต้องมี rubric บอกว่ากรรมการดูอะไร และ keyPoints 2-4 ข้อที่คำตอบดีควรมี
+- performance: ต้องมี task บอกชัดว่าผู้เล่นต้องทำอะไรบนเวทีภายในเวลาที่กำหนด และมี rubric
+
+คำใบ้ของทุกข้อ (ต้องมีครบทั้ง real 3 และ fake 3):
+  real = เบาะแสที่ถูกต้อง 100% ชี้ทางด้วยหลักการของหมวดนั้น แต่ไม่เฉลย
+  fake = ประโยคเดียวสองท่อน ท่อนแรกเป็นข้อเท็จจริงที่ถูกจริง ท่อนหลังฟังดูน่าเชื่อแต่ผิด
+         และชี้ไปยังคำตอบที่ผิด · ห้ามอ้างแหล่งข้อมูลปลอมที่ไม่มีอยู่จริง
+         ห้ามแต่งข้อมูลเท็จเรื่องยา การรักษา ขั้นตอนทางกฎหมาย หรือการโอนเงิน/ลงทุน
+
+${SHARED_RULES}
+`.trim();
+
+const STAGE_BRIEF: Record<Stage, string> = {
+  warmup:
+    "ช่วงวอร์มอัพ — ให้ตอบได้ไม่ยากเกินไป เน้นสร้างความมั่นใจ ระดับ ง่าย ถึง กลาง",
+  push: "ช่วงกลางเกม — ต้องคิดจริงจังขึ้น มีกับดักได้ ระดับ กลาง ถึง ยาก",
+  final:
+    "ช่วงชิงชนะเลิศ — ต้องท้าทายที่สุด ผสมการตัดสินใจหลายชั้นหรือการแสดงที่กดดัน ระดับ ยาก",
+};
+
+function newsBlock(items: NewsItem[]): string {
+  return items
+    .map(
+      (n, i) =>
+        `[${i + 1}] (${n.source} · ${n.region}) ${n.title}` +
+        (n.summary ? `\n    ${n.summary}` : ""),
+    )
+    .join("\n");
+}
+
+function seedBlock(seeds: QuestionSeed[], tasks: string[]): string {
+  const lines = seeds.map(
+    (s, i) => `[${i + 1}] เรื่อง: ${s.domain} · มุม: ${s.angle} · ทักษะที่อยากให้ได้: ${s.skill}`,
+  );
+  if (tasks.length > 0) {
+    lines.push("", "แม่แบบโจทย์โชว์ความสามารถ (เลือกไปดัดแปลงให้เข้ากับเรื่องที่ได้):");
+    lines.push(...tasks.map((t) => `- ${t}`));
+  }
+  return lines.join("\n");
+}
+
+interface BuildPromptArgs {
+  stage: Stage;
+  count: number;
+  formatPlan: QuestionFormat[];
+  seeds: QuestionSeed[];
+  tasks: string[];
+  news: NewsItem[];
+  avoid: string[];
+}
+
+function buildPrompt(args: BuildPromptArgs): string {
+  const formatCount = args.formatPlan.reduce<Record<string, number>>((acc, f) => {
+    acc[f] = (acc[f] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const lines = [
+    `ช่วงของเกม: ${args.stage} — ${STAGE_BRIEF[args.stage]}`,
+    `จำนวนที่ต้องแต่ง: ${args.count} ข้อ`,
+    "",
+    "สัดส่วนรูปแบบที่ต้องได้ (ห้ามเกินห้ามขาด):",
+    ...Object.entries(formatCount).map(([f, n]) => `- ${f}: ${n} ข้อ`),
+    "",
+    "ข่าวและบทความจริงที่เพิ่งเผยแพร่ — ใช้เป็นวัตถุดิบ เลือกชิ้นที่เหมาะ ไม่ต้องใช้ครบทุกชิ้น:",
+    newsBlock(args.news),
+    "",
+    `บรีฟรายข้อ — ข้อที่ ${args.count} ข้อต้องกระจายตามนี้ ห้ามกองอยู่เรื่องเดียว:`,
+    seedBlock(args.seeds, args.tasks),
+  ];
+
+  if (args.avoid.length > 0) {
+    lines.push(
+      "",
+      "คำถามที่ผู้เล่นคนนี้เพิ่งเจอไปแล้ว — ห้ามถามซ้ำหรือถามใกล้เคียง:",
+      ...args.avoid.map((t) => `- ${t}`),
+    );
+  }
+
+  lines.push(
+    "",
+    `แต่งมา ${args.count} ข้อ ตอบเป็น JSON ตามสคีมา`,
+    "ฟิลด์ที่ไม่เกี่ยวกับรูปแบบนั้นให้ส่งค่าว่าง — choices เป็น [] · correctAnswer/task/rubric เป็น \"\"",
+    "sourceNote = ชื่อสำนักข่าวที่เอาประเด็นมา หรือ \"—\" ถ้าไม่ได้อิงชิ้นไหนเป็นพิเศษ",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * ทุกฟิลด์เป็น required หมด แล้วให้ส่งค่าว่างสำหรับฟิลด์ที่ไม่เกี่ยวกับรูปแบบนั้น
+ *
+ * เพราะโหมด strict ของ OpenAI/Gemini บังคับว่าทุก property ต้องอยู่ใน required
+ * ถ้าประกาศเป็น optional สคีมาจะถูกปฏิเสธ การใช้ค่าว่างจึงเป็นทางที่ทำงานได้ทุกค่าย
+ */
+const QUESTION_SCHEMA = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          format: { type: "string", enum: ["choice", "open", "performance"] },
+          category: { type: "string", enum: CATEGORIES },
+          difficulty: { type: "string", enum: DIFFICULTIES },
+          prompt: { type: "string", description: "ตัวคำถาม ภาษาไทย 1-3 ประโยค" },
+          choices: {
+            type: "array",
+            description: "ปรนัย: 4 ตัวเลือก · รูปแบบอื่น: []",
+            items: { type: "string" },
+          },
+          correctAnswer: {
+            type: "string",
+            description: "ปรนัย: ต้องตรงกับตัวเลือกข้อหนึ่งเป๊ะ ๆ · รูปแบบอื่น: \"\"",
+          },
+          rubric: { type: "string", description: "อัตนัย/โชว์: เกณฑ์ให้คะแนน · ปรนัย: \"\"" },
+          keyPoints: {
+            type: "array",
+            description: "อัตนัย: ประเด็นที่คำตอบดีควรมี 2-4 ข้อ · อื่น ๆ: []",
+            items: { type: "string" },
+          },
+          task: { type: "string", description: "โชว์: สิ่งที่ต้องทำบนเวที · อื่น ๆ: \"\"" },
+          explanation: { type: "string", description: "เฉลยและเหตุผล 1-2 ประโยค" },
+          hints: {
+            type: "object",
+            properties: {
+              real: { type: "array", items: { type: "string" } },
+              fake: { type: "array", items: { type: "string" } },
+            },
+            required: ["real", "fake"],
+            additionalProperties: false,
+          },
+          sourceNote: { type: "string", description: "ชื่อสำนักข่าวที่เอาประเด็นมา" },
+        },
+        required: [
+          "format",
+          "category",
+          "difficulty",
+          "prompt",
+          "choices",
+          "correctAnswer",
+          "rubric",
+          "keyPoints",
+          "task",
+          "explanation",
+          "hints",
+          "sourceNote",
+        ],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+} as const;
+
+interface RawQuestion {
+  format?: string;
+  category?: string;
+  difficulty?: string;
+  prompt?: string;
+  choices?: string[];
+  correctAnswer?: string;
+  rubric?: string;
+  keyPoints?: string[];
+  task?: string;
+  explanation?: string;
+  hints?: { real?: string[]; fake?: string[] };
+  sourceNote?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ตัวตรวจ
+// ────────────────────────────────────────────────────────────────────────────
+
+const clean = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+const cleanList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map(clean).filter((s) => s.length > 0) : [];
+
+/**
+ * ทิ้งข้อที่ใช้ไม่ได้ทิ้งไปเลย ดีกว่าพยายามซ่อม
+ *
+ * ข้อที่เฉลยผิดหรือคำใบ้ไม่ครบทำลายเกมมากกว่าการมีคำถามน้อยลงหนึ่งข้อ
+ * (ตัวเรียกขอเกินโควตาไว้แล้ว จึงมีของสำรองให้ตัดทิ้งได้)
+ */
+export function validateQuestion(
+  raw: RawQuestion,
+  stage: Stage,
+  pointValue: number,
+): Question | null {
+  const prompt = clean(raw.prompt);
+  if (prompt.length < 12) return null;
+
+  const format = (["choice", "open", "performance"] as const).includes(
+    raw.format as QuestionFormat,
+  )
+    ? (raw.format as QuestionFormat)
+    : null;
+  if (!format) return null;
+
+  const hints = {
+    real: cleanList(raw.hints?.real),
+    fake: cleanList(raw.hints?.fake),
+  };
+  // ไม่มีคำใบ้ครบทั้งสองฝั่ง = เล่นไม่ได้ เพราะกล่องต้องมีทั้งจริงและหลอกอย่างน้อยอย่างละ 1
+  if (hints.real.length < 2 || hints.fake.length < 2) return null;
+
+  const explanation = clean(raw.explanation);
+  if (!explanation) return null;
+
+  const category = CATEGORIES.includes(raw.category as Category)
+    ? (raw.category as Category)
+    : "ชีวิตจริง";
+  const difficulty = DIFFICULTIES.includes(raw.difficulty as Difficulty)
+    ? (raw.difficulty as Difficulty)
+    : "กลาง";
+
+  const base = {
+    // id ต้องมาจากตัวคำถามล้วน ๆ ห้ามผูกกับลำดับที่โมเดลส่งมา
+    // ไม่งั้นคำถามเดิมที่โผล่มาอีกรอบจะได้ id ใหม่ แล้วความจำกันซ้ำจะจับไม่ได้
+    id: `live-${stage}-${fingerprintShort(prompt)}`,
+    category,
+    stage,
+    difficulty,
+    format,
+    pointValue,
+    prompt,
+    explanation,
+    hints,
+  };
+
+  if (format === "choice") {
+    const choices = cleanList(raw.choices);
+    const correctAnswer = clean(raw.correctAnswer);
+    if (choices.length !== 4) return null;
+    if (new Set(choices).size !== 4) return null;
+    if (!choices.includes(correctAnswer)) return null;
+    // ตัวเลือกที่ยาวกว่าเพื่อนเกินสองเท่าคือใบ้เฉลยกลาย ๆ ผู้เล่นเดาถูกโดยไม่ต้องคิด
+    const lengths = choices.map((c) => c.length);
+    if (Math.max(...lengths) > Math.min(...lengths) * 3) return null;
+    return { ...base, choices, correctAnswer };
+  }
+
+  const rubric = clean(raw.rubric);
+  if (!rubric) return null;
+
+  if (format === "open") {
+    const keyPoints = cleanList(raw.keyPoints);
+    if (keyPoints.length < 2) return null;
+    return { ...base, rubric, keyPoints };
+  }
+
+  const task = clean(raw.task);
+  if (!task) return null;
+  return { ...base, rubric, task };
+}
+
+/** id ต้องไม่ชนกันข้ามเกม เพราะ /api/hint ใช้ id หาข้อในคลังตั้งต้นก่อน */
+function fingerprintShort(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// แผนรูปแบบคำถามของแต่ละช่วง
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * สัดส่วนคร่าว ๆ ต่อช่วง — ยึดจากคลังตั้งต้นที่ทีมงานเขียนไว้
+ * อัตนัยเยอะกว่าปรนัยตามที่ตกลงกันไว้ และทุกช่วงต้องมีโจทย์โชว์ความสามารถอย่างน้อย 1
+ */
+function planFormats(stage: Stage, count: number): QuestionFormat[] {
+  const performance = Math.max(1, Math.round(count * 0.2));
+  const open = Math.max(1, Math.round(count * (stage === "warmup" ? 0.3 : 0.4)));
+  const choice = Math.max(0, count - performance - open);
+  return [
+    ...Array<QuestionFormat>(choice).fill("choice"),
+    ...Array<QuestionFormat>(open).fill("open"),
+    ...Array<QuestionFormat>(performance).fill("performance"),
+  ];
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ตัวเรียกหลัก
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface StageRequest {
+  stage: Stage;
+  count: number;
+  pointValue: number;
+}
+
+export interface GenerateOptions {
+  stages: StageRequest[];
+  groups: FeedGroup[];
+  avoid: string[];
+  llm?: LlmChoiceInput | null;
+}
+
+export interface GenerateResult {
+  questions: Question[];
+  /** ช่วงไหนสร้างได้ไม่ครบบ้าง — ตัวเรียกจะได้เติมจากคลังในเครื่อง */
+  shortfall: Record<string, number>;
+  sourcesUsed: string[];
+  feedsFailed: string[];
+}
+
+/** ขอเกินโควตาไว้ เพราะ validateQuestion() ตัดทิ้งได้เสมอ */
+const OVERSHOOT = 1.35;
+
+/**
+ * แต่งทีละ 4 ข้อต่อการเรียก 1 ครั้ง แล้วยิงทุกก้อนขนานกัน
+ *
+ * วัดจริงแล้วโมเดลใช้เวลา ~12 วิต่อคำถาม 1 ข้อ (เพราะแต่ละข้อพ่วงคำใบ้ 6 อัน)
+ * ถ้าขอ 13 ข้อในครั้งเดียวจะใช้เวลาเกิน 150 วิ ทะลุเพดาน 60 วิของ Vercel ไปไกล
+ * การแตกเป็นก้อนเล็กทำให้เวลารวมเท่ากับก้อนที่ช้าที่สุด (~40 วิ) ไม่ใช่ผลรวม
+ *
+ * ผลพลอยได้: แต่ละก้อนได้บรีฟและข่าวคนละชุด คำถามจึงกระจายกว่าการขอรวดเดียว
+ */
+const CHUNK_SIZE = 4;
+
+interface Chunk {
+  stage: Stage;
+  pointValue: number;
+  count: number;
+  index: number;
+}
+
+function planChunks(stages: StageRequest[]): Chunk[] {
+  const chunks: Chunk[] = [];
+  for (const req of stages) {
+    const ask = Math.ceil(req.count * OVERSHOOT);
+    let remaining = ask;
+    let index = 0;
+    while (remaining > 0) {
+      const size = Math.min(CHUNK_SIZE, remaining);
+      chunks.push({ stage: req.stage, pointValue: req.pointValue, count: size, index });
+      remaining -= size;
+      index += 1;
+    }
+  }
+  return chunks;
+}
+
+/** หมุนลิสต์ข่าวให้แต่ละก้อนเริ่มคนละจุด จะได้ไม่หยิบชิ้นเดิมไปตั้งคำถามเหมือนกัน */
+function rotate<T>(list: T[], by: number): T[] {
+  if (list.length === 0) return list;
+  const offset = (by * 7) % list.length;
+  return [...list.slice(offset), ...list.slice(0, offset)];
+}
+
+export async function generateQuestions(options: GenerateOptions): Promise<GenerateResult> {
+  const choice = resolveLlm(options.llm);
+  const empty: GenerateResult = {
+    questions: [],
+    shortfall: Object.fromEntries(options.stages.map((s) => [s.stage, s.count])),
+    sourcesUsed: [],
+    feedsFailed: [],
+  };
+  if (!isChoiceReady(choice)) return empty;
+
+  const totalWanted = options.stages.reduce((sum, s) => sum + s.count, 0);
+  const news = await harvest(options.groups, {
+    perFeed: 4,
+    total: Math.max(30, totalWanted * 2),
+    maxFeeds: 18,
+  });
+  // ไม่มีข่าวเลย = เน็ตล่มหรือฟีดตายหมด ปล่อยให้ตัวเรียกไปใช้คลังในเครื่องแทน
+  if (news.items.length < 6) return { ...empty, feedsFailed: news.failed };
+
+  const chunks = planChunks(options.stages);
+  const results = await Promise.all(
+    chunks.map(async (chunk, chunkIndex) => {
+      const formatPlan = planFormats(chunk.stage, chunk.count);
+      const seeds = drawSeeds(chunk.count);
+      const tasks = drawPerformanceTasks(
+        formatPlan.filter((f) => f === "performance").length,
+      );
+
+      const payload = await callLlmJson<{ questions?: RawQuestion[] }>(choice, {
+        system: SYSTEM,
+        prompt: buildPrompt({
+          stage: chunk.stage,
+          count: chunk.count,
+          formatPlan,
+          seeds,
+          tasks,
+          news: rotate(news.items, chunkIndex).slice(0, 18),
+          avoid: options.avoid,
+        }),
+        schema: QUESTION_SCHEMA as unknown as Record<string, unknown>,
+        // คำถามพร้อมคำใบ้ 6 อันต่อข้อกินโทเคนเยอะ เผื่อไว้มากกว่างานอื่น
+        maxTokens: 8_000,
+        tag: `questions:${chunk.stage}#${chunk.index}`,
+        timeoutMs: 50_000,
+      });
+
+      return { chunk, raws: payload?.questions ?? [] };
+    }),
+  );
+
+  // รวมทุกก้อนแล้วค่อยตัดซ้ำทีเดียว — ก้อนต่างกันมองไม่เห็นกัน จึงแต่งชนกันได้
+  const byStage = new Map<Stage, Question[]>();
+  const seen = new Set<string>();
+  for (const { chunk, raws } of results) {
+    for (const raw of raws) {
+      const q = validateQuestion(raw, chunk.stage, chunk.pointValue);
+      if (!q) continue;
+      const key = fingerprintShort(q.prompt);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const list = byStage.get(chunk.stage) ?? [];
+      list.push(q);
+      byStage.set(chunk.stage, list);
+    }
+  }
+
+  const questions: Question[] = [];
+  const shortfall: Record<string, number> = {};
+  for (const req of options.stages) {
+    const got = (byStage.get(req.stage) ?? []).slice(0, req.count);
+    questions.push(...got);
+    if (got.length < req.count) shortfall[req.stage] = req.count - got.length;
+  }
+
+  return {
+    questions,
+    shortfall,
+    sourcesUsed: news.ok,
+    feedsFailed: news.failed,
+  };
+}

@@ -3,11 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { QUESTION_BANK } from "@/lib/questions";
+import { clearSeen, recentTopics, seenCount } from "@/lib/history";
+import { resetPrefetch } from "@/lib/questionPrefetch";
 import {
   DEFAULT_LLM_SETTINGS,
   DEFAULT_SETTINGS,
+  FEED_GROUP_CHOICES,
+  FEED_GROUP_TH,
   KEYED_PROVIDERS,
   clearApiKey,
+  llmRequestPayload,
   isUsingCustomQuestions,
   isValidApiKey,
   loadApiKeys,
@@ -27,6 +32,7 @@ import {
   type KeyedProvider,
   type LlmProviderChoice,
   type LlmSettings,
+  type QuestionSource,
 } from "@/lib/settings";
 import type { AdminConfigResponse } from "@/app/api/admin/config/route";
 import type { AdminModelsResponse } from "@/app/api/admin/models/route";
@@ -541,16 +547,183 @@ function QuestionEditor({
 // แท็บกติกา
 // ════════════════════════════════════════════════════════════════════════════
 
+interface TrialResult {
+  ok: boolean;
+  message: string;
+  questions: Question[];
+}
+
 function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [s, setS] = useState<GameSettings>(DEFAULT_SETTINGS);
+  const [seenTotal, setSeenTotal] = useState(0);
+  const [trying, setTrying] = useState(false);
+  const [trial, setTrial] = useState<TrialResult | null>(null);
 
-  useEffect(() => setS(loadSettings()), []);
+  useEffect(() => {
+    setS(loadSettings());
+    setSeenTotal(seenCount());
+  }, []);
+
+  /**
+   * ลองสร้างจริง 3 ข้อด้วยค่าที่กำลังตั้งอยู่บนหน้าจอ (ยังไม่ต้องกดบันทึก)
+   * ไว้เช็กว่าคีย์ใช้ได้ ฟีดดึงได้ และคำถามที่ออกมาหน้าตาโอเคไหม ก่อนเอาไปเล่นจริง
+   */
+  async function handleTrySource() {
+    setTrying(true);
+    setTrial(null);
+    try {
+      const res = await fetch("/api/questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stages: [{ stage: "warmup", count: 3, pointValue: s.points.warmup }],
+          groups: s.feedGroups,
+          avoid: recentTopics(20),
+          llm: llmRequestPayload(),
+        }),
+      });
+      const data = (await res.json()) as {
+        questions?: Question[];
+        source?: string;
+        sourcesUsed?: string[];
+      };
+      const questions = data.questions ?? [];
+      setTrial({
+        ok: questions.length > 0,
+        message:
+          questions.length > 0
+            ? `สร้างได้ ${questions.length} ข้อ จากข่าว ${data.sourcesUsed?.length ?? 0} สำนัก`
+            : "สร้างไม่สำเร็จ — เช็กว่าตั้งคีย์และโมเดลในแท็บ API ถูกต้องแล้ว " +
+              "(ดูสาเหตุจริงได้ใน log ของเซิร์ฟเวอร์) ตอนนี้เกมจะใช้คลังในเครื่องแทน",
+        questions,
+      });
+    } catch (e) {
+      setTrial({ ok: false, message: `เรียกไม่สำเร็จ — ${String(e)}`, questions: [] });
+    } finally {
+      setTrying(false);
+    }
+  }
 
   const total = s.counts.warmup + s.counts.push + s.counts.final;
   const totalSeconds = STAGES.reduce((sum, st) => sum + s.counts[st] * s.seconds[st], 0);
 
   return (
     <div className="space-y-4">
+      {/* ══ แหล่งที่มาของคำถาม ═══════════════════════════════════════════ */}
+      <section className="panel space-y-3 p-4">
+        <h2 className="text-sm font-bold text-white">คำถามมาจากไหน</h2>
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {(
+            [
+              [
+                "live",
+                "แต่งสดจากข่าวจริง",
+                "ดึงข่าวและบทความที่เพิ่งเผยแพร่จากสำนักข่าวทั่วโลก แล้วให้ AI แต่งคำถามใหม่ทุกเกม ไม่ซ้ำของเดิม",
+              ],
+              [
+                "bank",
+                "ใช้คลังในเครื่อง",
+                "หยิบจากคลังคำถามในแท็บ “คำถาม” อย่างเดียว ไม่เรียก AI ไม่เสียโทเคน เริ่มเกมได้ทันที",
+              ],
+            ] as Array<[QuestionSource, string, string]>
+          ).map(([value, label, detail]) => (
+            <button
+              key={value}
+              onClick={() => setS({ ...s, questionSource: value })}
+              className={`rounded-xl border p-3.5 text-left transition ${
+                s.questionSource === value
+                  ? "border-sky-400 bg-sky-500/20 shadow-glow"
+                  : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
+              }`}
+            >
+              <p className="text-sm font-bold text-white">{label}</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-400">{detail}</p>
+            </button>
+          ))}
+        </div>
+
+        {s.questionSource === "live" ? (
+          <>
+            <div>
+              <p className="mb-1.5 text-[11px] font-semibold text-slate-300">
+                หมวดข่าวที่อนุญาตให้เอามาตั้งคำถาม
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {FEED_GROUP_CHOICES.map((g) => {
+                  const on = s.feedGroups.includes(g);
+                  return (
+                    <button
+                      key={g}
+                      onClick={() =>
+                        setS({
+                          ...s,
+                          feedGroups: on
+                            ? s.feedGroups.filter((x) => x !== g)
+                            : [...s.feedGroups, g],
+                        })
+                      }
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] transition ${
+                        on
+                          ? "border-teal-300/70 bg-teal-400/20 text-teal-100"
+                          : "border-stage-edge bg-white/[0.03] text-slate-400 hover:bg-white/[0.08]"
+                      }`}
+                    >
+                      {FEED_GROUP_TH[g] ?? g}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                ปิดหมดทุกหมวด = ใช้ทุกหมวด · ตั้งใจไม่มีหมวด “ข่าวด่วนทั่วไป”
+                เพราะเกมนี้แปะคำใบ้หลอกลงบนข้อมูล จึงไม่ควรเอาไปแตะข่าวสงคราม
+                คดีความ หรือภัยพิบัติที่มีคนเดือดร้อนจริง
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
+              <button
+                onClick={() => void handleTrySource()}
+                disabled={trying}
+                className="btn-ghost px-4 py-2 text-xs"
+              >
+                {trying ? "กำลังลอง..." : "ลองสร้างดู 3 ข้อ"}
+              </button>
+              <span className="text-[11px] text-slate-500">
+                จำคำถามที่เคยเล่นไว้ {seenTotal} ข้อ
+              </span>
+              <button
+                onClick={() => {
+                  clearSeen();
+                  setSeenTotal(0);
+                  resetPrefetch();
+                  onFlash("ล้างความจำกันซ้ำแล้ว — คำถามเก่าจะกลับมาโผล่ได้อีก");
+                }}
+                className="text-[11px] text-slate-500 underline hover:text-slate-300"
+              >
+                ล้างความจำ
+              </button>
+            </div>
+
+            {trial ? (
+              <div
+                className={`space-y-2 rounded-xl border px-3 py-2.5 text-[11px] leading-relaxed ${
+                  trial.ok
+                    ? "border-teal-300/50 bg-teal-400/10 text-teal-50"
+                    : "border-rose-400/50 bg-rose-500/10 text-rose-50"
+                }`}
+              >
+                <p className="font-semibold">{trial.message}</p>
+                {trial.questions.map((q) => (
+                  <p key={q.id} className="text-slate-200">
+                    <span className="text-sky-300">[{q.format}]</span> {q.prompt}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
       <section className="panel space-y-3 p-4">
         <h2 className="text-sm font-bold text-white">กล่องคำใบ้ (ใช้ร่วมทุกช่วง)</h2>
         <div className="grid grid-cols-3 gap-3">
@@ -682,6 +855,8 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
         <button
           onClick={() => {
             saveSettings(s);
+            // ชุดคำถามที่เตรียมไว้ล่วงหน้าอิงกติกาชุดเก่า ต้องทิ้งแล้วเตรียมใหม่
+            resetPrefetch();
             onFlash("บันทึกกติกาแล้ว — จะมีผลกับเกมรอบถัดไปที่กดเริ่ม");
           }}
           className="btn-primary flex-1"
@@ -692,6 +867,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
           onClick={() => {
             resetSettings();
             setS(DEFAULT_SETTINGS);
+            resetPrefetch();
             onFlash("คืนค่ากติกาเป็นค่าตั้งต้นแล้ว");
           }}
           className="btn-ghost text-rose-200"
@@ -780,7 +956,8 @@ const SUGGESTED_MODELS: Record<string, Array<{ id: string; tag: string }>> = {
     { id: "gpt-4o", tag: "เก่ง" },
   ],
   gemini: [
-    { id: "gemini-2.0-flash", tag: "เร็ว ประหยัด" },
+    // gemini-2.0-flash ถูก Google ปลดระวางแล้ว (404) อย่าใส่กลับมา
+    { id: "gemini-flash-latest", tag: "เร็ว ตามรุ่นใหม่เสมอ" },
     { id: "gemini-2.5-flash", tag: "สมดุล" },
     { id: "gemini-2.5-pro", tag: "เก่ง" },
   ],

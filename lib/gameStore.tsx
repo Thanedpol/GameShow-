@@ -8,6 +8,7 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
+import { seenIds } from "./history";
 import { drawQuestions } from "./questions";
 import { scoreForRound, scoreForSteal, stageKey } from "./scoring";
 import { DEFAULT_SETTINGS, loadQuestions, loadSettings } from "./settings";
@@ -16,6 +17,7 @@ import type {
   HintUsage,
   MatchMode,
   Participant,
+  Question,
   RoundResult,
 } from "./types";
 
@@ -45,7 +47,13 @@ export interface ResolveRoundPayload {
 }
 
 export type GameAction =
-  | { type: "START_GAME"; mode: MatchMode; participants: Participant[] }
+  | {
+      type: "START_GAME";
+      mode: MatchMode;
+      participants: Participant[];
+      /** ชุดที่เตรียมไว้ล่วงหน้า — ไม่ส่งมาจะสุ่มจากคลังในเครื่องให้แทน */
+      questions?: Question[];
+    }
   | { type: "RESOLVE_ROUND"; payload: ResolveRoundPayload }
   | { type: "RESOLVE_STEAL"; participantId: string; correct: boolean }
   | { type: "NEXT_QUESTION" }
@@ -77,11 +85,17 @@ function reducer(state: GameState, action: GameAction): GameState {
     case "START_GAME": {
       // อ่านค่าจากหลังบ้านตอนเริ่มเกม แล้วล็อกไว้ในสเตต
       const settings = loadSettings();
-      const questions = drawQuestions({
-        bank: loadQuestions(),
-        counts: settings.counts,
-        points: settings.points,
-      });
+      // ปกติชุดคำถามถูกเตรียมไว้แล้วตั้งแต่หน้าตั้งค่า (ดู lib/questionPrefetch.ts)
+      // ทางนี้เหลือไว้เผื่อมีคนสั่งเริ่มเกมโดยไม่ผ่านหน้านั้น
+      const questions =
+        action.questions && action.questions.length > 0
+          ? action.questions
+          : drawQuestions({
+              bank: loadQuestions(),
+              counts: settings.counts,
+              points: settings.points,
+              exclude: seenIds(),
+            });
       return {
         ...initialState,
         mode: action.mode,

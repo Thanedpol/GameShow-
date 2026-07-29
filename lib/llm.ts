@@ -42,11 +42,17 @@ export const PROVIDER_LABEL: Record<LlmProvider, string> = {
   ollama: "Ollama (เครื่องตัวเอง)",
 };
 
-/** ใช้ตอนผู้ใช้ยังไม่เคยเลือกโมเดลของเจ้านั้น */
+/**
+ * ใช้ตอนผู้ใช้ยังไม่เคยเลือกโมเดลของเจ้านั้น
+ *
+ * ฝั่ง Gemini ใช้ชื่อ -latest เพราะ Google ปลดระวางรุ่นเก่าโดยไม่เตือนล่วงหน้า
+ * (gemini-2.0-flash ตายไปแล้ว ตอบ 404 "no longer available") การตรึงเลขรุ่นไว้
+ * แปลว่าวันหนึ่งเกมจะตกไปโหมดสำรองเงียบ ๆ โดยไม่มีใครรู้
+ */
 export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: "claude-opus-5",
   openai: "gpt-4o-mini",
-  gemini: "gemini-2.0-flash",
+  gemini: "gemini-flash-latest",
   openrouter: "anthropic/claude-sonnet-4.5",
   ollama: "llama3.1",
 };

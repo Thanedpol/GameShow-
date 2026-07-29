@@ -23,7 +23,40 @@ export interface GameSettings {
   points: Record<Stage, number>;
   /** จำนวนข้อที่หยิบมาใช้ต่อ 1 เกม */
   counts: Record<Stage, number>;
+  /**
+   * live = ให้ AI แต่งคำถามใหม่จากข่าว/บทความจริงทุกเกม (ขาดเท่าไรเติมจากคลัง)
+   * bank = ใช้คลังในเครื่องอย่างเดียว ไม่เรียก AI ไม่เสียโทเคน
+   */
+  questionSource: QuestionSource;
+  /** กลุ่มฟีดที่อนุญาตให้ดึงข่าวมาตั้งคำถาม — ว่าง = ใช้ทุกกลุ่ม */
+  feedGroups: string[];
 }
+
+export type QuestionSource = "live" | "bank";
+
+/**
+ * ต้องตรงกับ FeedGroup ใน lib/sources.ts
+ * ประกาศซ้ำที่นี่เพราะ sources.ts เป็น server-only — ฝั่ง client import ไม่ได้
+ */
+export const FEED_GROUP_CHOICES = [
+  "life",
+  "work",
+  "tech",
+  "money",
+  "health",
+  "science",
+  "security",
+] as const;
+
+export const FEED_GROUP_TH: Record<string, string> = {
+  life: "ชีวิตและวัฒนธรรม",
+  work: "ธุรกิจและที่ทำงาน",
+  tech: "เทคโนโลยีและ AI",
+  money: "การเงินส่วนบุคคล",
+  health: "สุขภาพ",
+  science: "วิทยาศาสตร์",
+  security: "ภัยไซเบอร์และสแกม",
+};
 
 export const DEFAULT_SETTINGS: GameSettings = {
   boxCount: 4,
@@ -33,6 +66,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   maxOpenBoxes: { warmup: 1, push: 1, final: 2 },
   points: { warmup: 100, push: 200, final: 300 },
   counts: { warmup: 7, push: 9, final: 4 },
+  questionSource: "live",
+  feedGroups: [...FEED_GROUP_CHOICES],
 };
 
 const SETTINGS_KEY = "baijing.settings.v1";
@@ -75,7 +110,18 @@ export function normalizeSettings(raw: Partial<GameSettings> | null): GameSettin
     maxOpenBoxes: stageRecord(raw.maxOpenBoxes, DEFAULT_SETTINGS.maxOpenBoxes, 0, boxCount),
     points: stageRecord(raw.points, DEFAULT_SETTINGS.points, 0, 100000),
     counts: stageRecord(raw.counts, DEFAULT_SETTINGS.counts, 0, 30),
+    questionSource: raw.questionSource === "bank" ? "bank" : "live",
+    feedGroups: normalizeFeedGroups(raw.feedGroups),
   };
+}
+
+/** ปิดทุกกลุ่มเท่ากับเปิดทุกกลุ่ม — ไม่งั้นจะไม่มีข่าวให้ตั้งคำถามเลย */
+function normalizeFeedGroups(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...FEED_GROUP_CHOICES];
+  const picked = raw.filter(
+    (g): g is string => typeof g === "string" && (FEED_GROUP_CHOICES as readonly string[]).includes(g),
+  );
+  return picked.length > 0 ? picked : [...FEED_GROUP_CHOICES];
 }
 
 export function loadSettings(): GameSettings {

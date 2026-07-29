@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import RoomPanel from "./RoomPanel";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
+import { startPrefetch, takeQuestions } from "@/lib/questionPrefetch";
 import { MODE_LABEL, STAGE_LABEL } from "@/lib/scoring";
 import { DEFAULT_SETTINGS, loadSettings, type GameSettings } from "@/lib/settings";
 import { MAX_PARTICIPANTS, TEAM_SIZE, type MatchMode, type Participant } from "@/lib/types";
@@ -30,7 +31,38 @@ export default function SetupScreen() {
   ]);
   // อ่านกติกาที่ตั้งไว้จากหลังบ้าน มาแสดงให้ตรงกับที่จะเล่นจริง
   const [cfg, setCfg] = useState<GameSettings>(DEFAULT_SETTINGS);
+  const [starting, setStarting] = useState(false);
+  const [waited, setWaited] = useState(0);
   useEffect(() => setCfg(loadSettings()), []);
+
+  /**
+   * เริ่มแต่งคำถามเบื้องหลังทันทีที่ผู้เล่นแตะอะไรก็ตามบนหน้านี้
+   *
+   * ไม่ยิงตอน mount เพราะคนที่เปิดหน้ามาดูเฉย ๆ ไม่ควรทำให้เสียโทเคน
+   * แต่ก็ไม่รอจนกดเลือกโหมด เพราะการแต่งคำถามใช้เวลาราว 40 วินาที
+   * ถ้าเริ่มช้าไปผู้เล่นที่พิมพ์ชื่อเร็วจะต้องมานั่งรอหน้าปุ่ม
+   * การแตะหน้าจอครั้งแรกคือสัญญาณที่เร็วที่สุดที่ยังบอกได้ว่า "จะเล่นจริง"
+   */
+  useEffect(() => {
+    const kick = () => startPrefetch();
+    const opts = { once: true, passive: true } as const;
+    window.addEventListener("pointerdown", kick, opts);
+    window.addEventListener("keydown", kick, opts);
+    return () => {
+      window.removeEventListener("pointerdown", kick);
+      window.removeEventListener("keydown", kick);
+    };
+  }, []);
+
+  // นับวินาทีตอนรอ เพื่อให้เห็นว่าระบบยังทำงานอยู่ ไม่ได้ค้าง
+  useEffect(() => {
+    if (!starting) {
+      setWaited(0);
+      return;
+    }
+    const timer = window.setInterval(() => setWaited((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [starting]);
 
   const slots = mode === "solo" || mode === "bot" ? 1 : count;
 
@@ -54,8 +86,8 @@ export default function SetupScreen() {
     return Array.from({ length: slots }).every((_, i) => names[i].trim().length > 0);
   }, [mode, slots, names, teamNames, members]);
 
-  function handleStart() {
-    if (!ready) return;
+  async function handleStart() {
+    if (!ready || starting) return;
 
     const participants: Participant[] = [];
     if (mode === "team") {
@@ -92,7 +124,15 @@ export default function SetupScreen() {
       }
     }
 
-    dispatch({ type: "START_GAME", mode, participants });
+    // ปกติชุดคำถามเตรียมเสร็จตั้งแต่ตอนเลือกโหมดแล้ว บรรทัดนี้จึงคืนค่าทันที
+    // จะรอจริงก็เฉพาะตอนที่ผู้เล่นกรอกชื่อเร็วกว่าที่ AI แต่งคำถามเสร็จ
+    setStarting(true);
+    try {
+      const prepared = await takeQuestions();
+      dispatch({ type: "START_GAME", mode, participants, questions: prepared.questions });
+    } finally {
+      setStarting(false);
+    }
   }
 
   return (
@@ -244,7 +284,7 @@ export default function SetupScreen() {
                   id={`name-${i}`}
                   value={names[i]}
                   onChange={(e) => setName(i, e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && ready && handleStart()}
+                  onKeyDown={(e) => e.key === "Enter" && ready && void handleStart()}
                   maxLength={16}
                   placeholder="เช่น มายด์"
                   autoComplete="off"
@@ -253,11 +293,19 @@ export default function SetupScreen() {
               </div>
             ))}
 
-        <button onClick={handleStart} disabled={!ready} className="btn-primary w-full text-lg">
-          เริ่มเกม
+        <button
+          onClick={() => void handleStart()}
+          disabled={!ready || starting}
+          className="btn-primary w-full text-lg disabled:opacity-60"
+        >
+          {starting ? "กำลังเตรียมคำถามจากข่าวจริง..." : "เริ่มเกม"}
         </button>
         {!ready ? (
           <p className="text-center text-xs text-slate-500">กรอกชื่อให้ครบก่อนเริ่ม</p>
+        ) : starting ? (
+          <p className="text-center text-xs text-sky-300">
+            แต่งคำถามชุดใหม่จากข่าวและบทความที่เพิ่งเผยแพร่ · {waited} วินาที
+          </p>
         ) : null}
       </section>
 

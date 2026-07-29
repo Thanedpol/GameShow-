@@ -96,12 +96,19 @@ export interface RevealedHintBox extends HintBox {
 }
 
 /**
- * ผู้ให้บริการ LLM + โมเดลที่หลังบ้านเลือกไว้
- * ส่งแนบไปกับทุก request ที่ต้องเรียกโมเดล ตัวคีย์ยังอยู่ฝั่งเซิร์ฟเวอร์เสมอ
+ * ผู้ให้บริการ LLM + โมเดล + คีย์ ที่หลังบ้านเลือกไว้
+ * ส่งแนบไปกับทุก request ที่ต้องเรียกโมเดล
+ *
+ * ต้องมีฟิลด์ตรงกับ LlmChoiceInput ใน lib/llm.ts — ประกาศซ้ำที่นี่เพราะ
+ * lib/llm.ts เป็น server-only ฝั่ง client import ไม่ได้
+ * (apiKey ตกหล่นไปรอบหนึ่งแล้ว โค้ดยังคอมไพล์ผ่านเพราะ TypeScript เทียบด้วยโครงสร้าง
+ *  แต่ถ้าไม่มีใครสังเกต ฟิลด์ที่เพิ่มทีหลังจะหายเงียบ ๆ แบบนั้นอีก)
  */
 export interface LlmChoiceInput {
   provider?: string;
   model?: string;
+  /** คีย์ที่ผู้ใช้กรอกเองในหลังบ้าน (BYOK) — ดู lib/settings.ts */
+  apiKey?: string;
 }
 
 export interface HintApiRequest {

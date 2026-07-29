@@ -672,12 +672,21 @@ export interface DrawOptions {
   bank?: Question[];
   counts?: Partial<Record<Stage, number>>;
   points?: Partial<Record<Stage, number>>;
+  /** id ของข้อที่เพิ่งเล่นไป — เลี่ยงก่อน ถ้าเลี่ยงแล้วไม่พอค่อยยอมซ้ำ */
+  exclude?: Set<string>;
 }
 
-/** ชุดคำถามของ 1 เกม เรียงตามช่วง พร้อมสลับลำดับตัวเลือก */
+/**
+ * ชุดคำถามของ 1 เกม เรียงตามช่วง พร้อมสลับลำดับตัวเลือก
+ *
+ * `exclude` เป็นแค่ "ความชอบ" ไม่ใช่ข้อบังคับ — ถ้าตัดของที่เคยเล่นออกแล้ว
+ * เหลือไม่พอจำนวนที่ขอ จะถอยไปใช้คลังเต็มแทน ดีกว่าปล่อยให้เกมเริ่มไม่ได้
+ * เพราะคลังในเครื่องมีจำกัด ยังไงเล่นหลายรอบก็ต้องวนมาเจอซ้ำอยู่ดี
+ */
 export function drawQuestions(options: DrawOptions = {}): Question[] {
   const bank = options.bank?.length ? options.bank : QUESTION_BANK;
   const counts = { warmup: 4, push: 4, final: 1, ...options.counts };
+  const exclude = options.exclude;
 
   const withOverrides = (q: Question): Question => ({
     ...q,
@@ -688,10 +697,22 @@ export function drawQuestions(options: DrawOptions = {}): Question[] {
   const stages: Stage[] = ["warmup", "push", "final"];
   const picked: Question[] = [];
   for (const stage of stages) {
-    const pool = bank.filter((q) => q.stage === stage);
-    const n = Math.min(counts[stage] ?? 0, pool.length);
-    if (n <= 0) continue;
-    picked.push(...pickWithVariety(pool, n));
+    const all = bank.filter((q) => q.stage === stage);
+    const want = counts[stage] ?? 0;
+    if (want <= 0) continue;
+
+    // หยิบจากของที่ยังไม่เคยเล่นให้ครบก่อน ค่อยเติมจากของเก่าถ้ายังขาด
+    // (pickWithVariety สลับลำดับข้างในอยู่แล้ว จึงต้องแยกหยิบสองรอบ
+    //  ถ้าเทรวมกันแล้วค่อยสุ่ม ของเก่าจะแทรกขึ้นมาทั้งที่ของใหม่ยังเหลือ)
+    const fresh = exclude ? all.filter((q) => !exclude.has(q.id)) : all;
+    const out = pickWithVariety(fresh, Math.min(want, fresh.length));
+    if (out.length < want) {
+      const taken = new Set(out.map((q) => q.id));
+      const rest = all.filter((q) => !taken.has(q.id));
+      out.push(...pickWithVariety(rest, Math.min(want - out.length, rest.length)));
+    }
+    if (out.length === 0) continue;
+    picked.push(...out);
   }
   return picked.map(withOverrides);
 }
