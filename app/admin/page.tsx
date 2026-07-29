@@ -710,17 +710,52 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
 interface ProviderChoiceInfo {
   value: LlmProviderChoice;
   label: string;
-  icon: string;
-  hint: string;
+  /** คำอธิบายหนึ่งบรรทัดบนการ์ดเลือกค่าย */
+  blurb: string;
+  /** หน้าขอคีย์ของค่ายนั้น — Ollama กับ auto ไม่ต้องใช้คีย์ */
+  keyUrl?: string;
+  keyPlaceholder?: string;
 }
 
 const PROVIDER_CHOICES: ProviderChoiceInfo[] = [
-  { value: "auto", label: "ตามเซิร์ฟเวอร์", icon: "⚙️", hint: "ใช้ค่าที่ตั้งไว้ใน env" },
-  { value: "anthropic", label: "Claude", icon: "🟣", hint: "คำใบ้คมที่สุด" },
-  { value: "openai", label: "GPT", icon: "🟢", hint: "OpenAI" },
-  { value: "gemini", label: "Gemini", icon: "🔵", hint: "Google · มีโควตาฟรี" },
-  { value: "openrouter", label: "OpenRouter", icon: "🟠", hint: "คีย์เดียว หลายร้อยโมเดล" },
-  { value: "ollama", label: "Ollama", icon: "⚫", hint: "รันในเครื่อง ฟรี" },
+  {
+    value: "anthropic",
+    label: "Claude",
+    blurb: "คุณภาพงานเขียนภาษาไทยดีที่สุด และ prompt คำใบ้ทั้งหมดจูนมากับค่ายนี้",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    keyPlaceholder: "sk-ant-...",
+  },
+  {
+    value: "gemini",
+    label: "Gemini",
+    blurb: "ของ Google มีโควตาฟรีให้ใช้ เหมาะกับงานประจำวัน",
+    keyUrl: "https://aistudio.google.com/apikey",
+    keyPlaceholder: "AIza... หรือ AQ....",
+  },
+  {
+    value: "openai",
+    label: "GPT",
+    blurb: "ของ OpenAI ใช้ได้ครอบจักรวาล คีย์จาก platform.openai.com",
+    keyUrl: "https://platform.openai.com/api-keys",
+    keyPlaceholder: "sk-...",
+  },
+  {
+    value: "openrouter",
+    label: "OpenRouter",
+    blurb: "คีย์เดียวใช้ได้หลายร้อยโมเดล ทั้ง GPT, Claude, Llama, Qwen",
+    keyUrl: "https://openrouter.ai/keys",
+    keyPlaceholder: "sk-or-v1-...",
+  },
+  {
+    value: "ollama",
+    label: "Ollama",
+    blurb: "รันโมเดลบนเครื่องตัวเอง ไม่เสียค่าใช้จ่ายและข้อมูลไม่ออกนอกเครื่อง",
+  },
+  {
+    value: "auto",
+    label: "ตามเซิร์ฟเวอร์",
+    blurb: "ใช้ค่าที่ตั้งไว้ใน environment ของเซิร์ฟเวอร์ ไม่ต้องเลือกเอง",
+  },
 ];
 
 /**
@@ -752,13 +787,6 @@ const SUGGESTED_MODELS: Record<string, Array<{ id: string; tag: string }>> = {
     { id: "qwen2.5", tag: "ภาษาไทยพอใช้" },
     { id: "gemma2", tag: "เบา" },
   ],
-};
-
-const KEY_PLACEHOLDER: Record<string, string> = {
-  anthropic: "sk-ant-...",
-  openai: "sk-...",
-  gemini: "AIza... หรือ AQ....",
-  openrouter: "sk-or-v1-...",
 };
 
 /** จำนวนปุ่มโมเดลที่แสดงพร้อมกันตอนโหลดรายชื่อเต็ม กัน DOM บวมตอนมี 300+ ตัว */
@@ -807,8 +835,10 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
   const effectiveProvider =
     llm.provider === "auto" ? (cfg?.serverProvider ?? "anthropic") : llm.provider;
   const activeStatus = cfg?.providers.find((p) => p.provider === effectiveProvider);
-  const providerLabel =
-    PROVIDER_CHOICES.find((p) => p.value === effectiveProvider)?.label ?? effectiveProvider;
+  /** ข้อมูลของค่ายที่กำลังจะถูกใช้จริง — ใช้วาดแผงตั้งค่าด้านล่าง */
+  const activeInfo =
+    PROVIDER_CHOICES.find((p) => p.value === effectiveProvider) ?? PROVIDER_CHOICES[0];
+  const providerLabel = activeInfo.label;
 
   // ชื่อโมเดลที่จะถูกใช้จริง — ถ้ายังไม่เลือกและใช้ค่าเซิร์ฟเวอร์อยู่ก็โชว์ของเซิร์ฟเวอร์
   const effectiveModel =
@@ -926,48 +956,282 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
 
   return (
     <div className="space-y-4">
-      {/* ══ สรุปว่าตอนนี้เกมใช้อะไร + ปุ่มทดสอบ ══════════════════════════ */}
-      <section
-        className={`rounded-2xl border p-4 ${
-          ready
-            ? "border-teal-300/50 bg-teal-400/10"
-            : "border-amber-400/50 bg-amber-500/10"
-        }`}
-      >
-        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-300/80">
-          ตอนนี้เกมใช้
+      {/* ══ หัวเรื่อง ═════════════════════════════════════════════════════ */}
+      <header>
+        <h2 className="text-xl font-extrabold text-white">ตั้งค่าโมเดล</h2>
+        <p className="mt-1 text-xs leading-relaxed text-slate-400">
+          เลือกค่ายที่จะใช้สร้างคำใบ้และตรวจคำตอบ ตั้งครั้งเดียวจำไว้ให้เลย
         </p>
-        <p className="mt-1 text-xl font-extrabold text-white">
-          {providerLabel}
-          {effectiveModel ? (
-            <span className="ml-2 font-mono text-sm font-semibold text-slate-300">
-              {effectiveModel}
-            </span>
-          ) : (
-            <span className="ml-2 text-sm font-medium text-slate-400">
-              (โมเดลตั้งต้นของเจ้านี้)
-            </span>
-          )}
-        </p>
-        <p className={`mt-1 text-xs ${ready ? "text-teal-100" : "text-amber-100"}`}>
-          {!ready
-            ? `⚠ ยังไม่มีคีย์ (${activeStatus?.envKey ?? "—"}) เกมจะเล่นได้แต่ใช้คำใบ้สำรองแทน AI`
-            : activeStatus?.envKey
-              ? "● ตั้งคีย์แล้ว — กดทดสอบเพื่อยืนยันว่าเรียกได้จริง"
-              : "● ไม่ต้องใช้คีย์ — กดทดสอบเพื่อดูว่าต่อถึงหรือเปล่า"}
-        </p>
+      </header>
 
-        <button
-          onClick={() => void handleTest()}
-          disabled={testing}
-          className="btn-teal mt-3 w-full text-sm"
-        >
-          {testing ? "กำลังทดสอบ..." : "🔌 ทดสอบเชื่อมต่อจริง"}
-        </button>
+      {/* ══ เลือกค่าย ═════════════════════════════════════════════════════ */}
+      <section className="panel p-4 sm:p-5">
+        <h3 className="mb-3 text-sm font-bold text-white">เลือกค่าย</h3>
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {PROVIDER_CHOICES.map((p) => {
+            const active = llm.provider === p.value;
+            const status = cfg?.providers.find((s) => s.provider === p.value);
+            // auto ไม่มีคีย์ของตัวเอง ส่วน Ollama ไม่ต้องใช้คีย์จึงถือว่าพร้อมเสมอ
+            const configured =
+              p.value === "auto" ? false : status ? !status.envKey || status.ready : false;
+            return (
+              <button
+                key={p.value}
+                onClick={() => handleProvider(p.value)}
+                className={`rounded-xl border p-3.5 text-left transition ${
+                  active
+                    ? "border-sky-400 bg-sky-500/20 shadow-glow"
+                    : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-sm font-bold text-white">{p.label}</span>
+                  {configured ? (
+                    <span className="chip bg-teal-400/20 px-2 py-0.5 text-[10px] text-teal-100">
+                      ตั้งค่าแล้ว
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-400">{p.blurb}</p>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ══ ตั้งค่าค่ายที่เลือก ════════════════════════════════════════════ */}
+      <section className="panel space-y-4 p-4 sm:p-5">
+        <h3 className="text-sm font-bold text-white">ตั้งค่า {providerLabel}</h3>
+
+        {cfg?.passwordRequired ? (
+          <Field label="รหัสผ่านหลังบ้าน (ADMIN_PASSWORD)">
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onBlur={() => void refresh()}
+              className="field py-2.5 text-sm"
+            />
+          </Field>
+        ) : null}
+
+        {llm.provider === "auto" ? (
+          <p className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-3 py-2.5 text-[11px] leading-relaxed text-sky-100">
+            กำลังใช้ค่าของเซิร์ฟเวอร์ — ตอนนี้คือ <b>{cfg?.serverProvider ?? "—"}</b>
+            {cfg?.serverModel ? (
+              <>
+                {" · "}
+                <b className="font-mono">{cfg.serverModel}</b>
+              </>
+            ) : null}{" "}
+            ถ้าอยากล็อกค่ายเอง ให้กดเลือกการ์ดด้านบน
+          </p>
+        ) : null}
+
+        {/* API key ของค่ายที่กำลังใช้ */}
+        {activeInfo.keyUrl ? (
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+              API key
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={keyDrafts[effectiveProvider] ?? ""}
+                onChange={(e) =>
+                  setKeyDrafts({ ...keyDrafts, [effectiveProvider]: e.target.value })
+                }
+                placeholder={
+                  activeStatus?.ready
+                    ? `ตั้งไว้แล้ว · ${activeStatus.maskedKey}`
+                    : activeInfo.keyPlaceholder
+                }
+                autoComplete="off"
+                spellCheck={false}
+                disabled={!cfg?.writable}
+                className="field flex-1 py-2.5 text-sm disabled:opacity-50"
+              />
+              <button
+                onClick={() => void handleSaveKeys()}
+                disabled={!cfg?.writable || !keysDirty}
+                className="btn-primary shrink-0 px-5 py-2.5 text-sm"
+              >
+                บันทึก
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              {activeStatus?.ready ? (
+                <span className="text-teal-300">มีคีย์แล้ว</span>
+              ) : (
+                <span className="text-amber-300">ยังไม่มีคีย์</span>
+              )}{" "}
+              <a
+                href={activeInfo.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-300 underline hover:text-sky-200"
+              >
+                ขอได้ที่นี่
+              </a>{" "}
+              —{" "}
+              {cfg?.writable
+                ? `บันทึกลง .env.local ในเครื่องนี้ (${activeStatus?.envKey ?? "—"}) แล้วต้องรีสตาร์ท dev server`
+                : `เว็บจริงแก้ที่นี่ไม่ได้ ต้องตั้ง ${activeStatus?.envKey ?? "—"} ที่ Vercel แล้ว Redeploy`}
+            </p>
+          </div>
+        ) : null}
+
+        {/* Ollama ใช้ URL แทนคีย์ */}
+        {effectiveProvider === "ollama" ? (
+          <div>
+            <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+              ที่อยู่เซิร์ฟเวอร์ Ollama
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={ollamaUrl}
+                onChange={(e) => setOllamaUrl(e.target.value)}
+                placeholder={cfg?.ollamaBaseUrl ?? "http://127.0.0.1:11434"}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={!cfg?.writable}
+                className="field flex-1 py-2.5 font-mono text-sm disabled:opacity-50"
+              />
+              <button
+                onClick={() => void handleSaveKeys()}
+                disabled={!cfg?.writable || !keysDirty}
+                className="btn-primary shrink-0 px-5 py-2.5 text-sm"
+              >
+                บันทึก
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              ไม่ต้องใช้คีย์ — แต่เซิร์ฟเวอร์ต้องต่อถึงเครื่องที่รัน Ollama ได้
+              บนเว็บจริงจะเรียก localhost ของคุณไม่ได้
+            </p>
+          </div>
+        ) : null}
+
+        {/* โมเดล */}
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold text-slate-300">โมเดล</label>
+          <input
+            value={customModel}
+            onChange={(e) => {
+              setCustomModel(e.target.value);
+              setLlm((prev) => ({ ...prev, model: e.target.value.trim() }));
+              setTestResult(null);
+            }}
+            placeholder={suggestions[0]?.id ?? "ชื่อโมเดล"}
+            autoComplete="off"
+            spellCheck={false}
+            className="field py-2.5 font-mono text-sm"
+          />
+
+          {suggestions.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {suggestions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => pickModel(s.id)}
+                  title={s.tag}
+                  className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] transition ${
+                    llm.model === s.id
+                      ? "border-sky-400 bg-sky-500/20 text-white"
+                      : "border-stage-edge bg-white/[0.03] text-slate-300 hover:bg-white/[0.08]"
+                  }`}
+                >
+                  {s.id}
+                </button>
+              ))}
+              <button
+                onClick={() => void fetchModels()}
+                disabled={loadingModels}
+                className="rounded-lg border border-stage-edge bg-white/[0.03] px-2.5 py-1 text-[10px] text-slate-300 transition hover:bg-white/[0.08] disabled:opacity-50"
+              >
+                {loadingModels ? "กำลังโหลด..." : "ดูรายชื่อจริงทั้งหมด"}
+              </button>
+            </div>
+          ) : null}
+
+          {modelError ? (
+            <p className="mt-2 rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-[11px] leading-relaxed text-rose-100">
+              {modelError}
+            </p>
+          ) : null}
+
+          {models.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              <input
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+                placeholder={`ค้นหาใน ${models.length} โมเดล...`}
+                className="field py-2 text-sm"
+              />
+              <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                {filteredModels.slice(0, MODEL_PAGE_SIZE).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => pickModel(m.id)}
+                    title={m.id}
+                    className={`rounded-lg border px-3 py-2 text-left transition ${
+                      llm.model === m.id
+                        ? "border-sky-400 bg-sky-500/20"
+                        : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <p className="truncate text-[11px] font-semibold text-slate-100">
+                      {m.label}
+                    </p>
+                    <p className="truncate font-mono text-[10px] text-slate-500">{m.id}</p>
+                  </button>
+                ))}
+              </div>
+              {filteredModels.length > MODEL_PAGE_SIZE ? (
+                <p className="text-[10px] text-slate-500">
+                  แสดง {MODEL_PAGE_SIZE} จาก {filteredModels.length} รายการ —
+                  พิมพ์ค้นหาเพื่อกรองให้แคบลง
+                </p>
+              ) : null}
+              {filteredModels.length === 0 ? (
+                <p className="text-[11px] text-slate-400">ไม่มีโมเดลที่ตรงกับคำค้น</p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        {/* แถบล่าง: สถานะซ้าย ปุ่มขวา */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+          <div className="min-w-0">
+            <p
+              className={`text-xs font-semibold ${ready ? "text-teal-300" : "text-amber-300"}`}
+            >
+              {ready ? "พร้อมใช้งาน" : "ยังไม่มีคีย์ — เกมจะใช้คำใบ้สำรองแทน AI"}
+            </p>
+            <button
+              onClick={handleResetChoice}
+              className="mt-0.5 text-[11px] text-slate-500 underline hover:text-slate-300"
+            >
+              คืนค่าเริ่มต้น
+            </button>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              onClick={() => void handleTest()}
+              disabled={testing}
+              className="btn-ghost px-4 py-2.5 text-sm"
+            >
+              {testing ? "กำลังทดสอบ..." : "ทดสอบการเชื่อมต่อ"}
+            </button>
+            <button onClick={handleSaveChoice} className="btn-primary px-5 py-2.5 text-sm">
+              เริ่มใช้งาน
+            </button>
+          </div>
+        </div>
 
         {testResult ? (
           <p
-            className={`mt-2 rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+            className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
               testResult.ok
                 ? "border-teal-300/50 bg-teal-400/15 text-teal-50"
                 : "border-rose-400/50 bg-rose-500/15 text-rose-50"
@@ -978,271 +1242,6 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           </p>
         ) : null}
       </section>
-
-      {/* ══ ① เลือกผู้ให้บริการ ═══════════════════════════════════════════ */}
-      <section className="panel space-y-3 p-4">
-        <StepTitle n="1" title="เลือกผู้ให้บริการ" />
-
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {PROVIDER_CHOICES.map((p) => {
-            const active = llm.provider === p.value;
-            const status = cfg?.providers.find((s) => s.provider === p.value);
-            return (
-              <button
-                key={p.value}
-                onClick={() => handleProvider(p.value)}
-                className={`relative rounded-xl border p-3 text-left transition ${
-                  active
-                    ? "border-sky-400 bg-sky-500/20 shadow-glow"
-                    : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
-                }`}
-              >
-                {active ? (
-                  <span className="absolute right-2 top-2 text-xs text-sky-300">✓</span>
-                ) : null}
-                <span className="text-base" aria-hidden="true">
-                  {p.icon}
-                </span>
-                <p className="mt-0.5 text-xs font-bold text-white">{p.label}</p>
-                <p className="mt-0.5 text-[10px] leading-snug text-slate-400">{p.hint}</p>
-                {status ? (
-                  <p
-                    className={`mt-1 text-[10px] font-semibold ${
-                      status.ready ? "text-teal-300" : "text-amber-300"
-                    }`}
-                  >
-                    {/* Ollama ไม่ต้องใช้คีย์ ถ้าเขียนว่า "มีคีย์แล้ว" จะเข้าใจผิด */}
-                    {!status.envKey
-                      ? "● ไม่ต้องใช้คีย์"
-                      : status.ready
-                        ? "● มีคีย์แล้ว"
-                        : "○ ยังไม่มีคีย์"}
-                  </p>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* ══ ② เลือกโมเดล — เป็นปุ่มกดทั้งหมด ═════════════════════════════ */}
-      <section className="panel space-y-3 p-4">
-        <StepTitle n="2" title="เลือกโมเดล" />
-
-        {suggestions.length > 0 ? (
-          <div className="space-y-1.5">
-            <p className="text-[11px] font-semibold text-slate-300">แนะนำ — กดเลือกได้เลย</p>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {suggestions.map((s) => {
-                const active = llm.model === s.id;
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => pickModel(s.id)}
-                    className={`rounded-xl border px-3 py-2.5 text-left transition ${
-                      active
-                        ? "border-sky-400 bg-sky-500/20 shadow-glow"
-                        : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
-                    }`}
-                  >
-                    <p className="truncate font-mono text-[11px] font-bold text-white">
-                      {s.id}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-slate-400">{s.tag}</p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => void fetchModels()}
-            disabled={loadingModels}
-            className="btn-ghost text-xs"
-          >
-            {loadingModels ? "กำลังโหลด..." : "📋 ดูรายชื่อจริงทั้งหมด"}
-          </button>
-          {llm.model ? (
-            <button
-              onClick={() => {
-                setLlm((prev) => ({ ...prev, model: "" }));
-                setCustomModel("");
-              }}
-              className="text-[11px] text-slate-400 underline hover:text-slate-200"
-            >
-              ล้างที่เลือกไว้
-            </button>
-          ) : null}
-        </div>
-
-        {modelError ? (
-          <p className="rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-100">
-            ❌ {modelError}
-          </p>
-        ) : null}
-
-        {models.length > 0 ? (
-          <div className="space-y-2">
-            <input
-              value={modelQuery}
-              onChange={(e) => setModelQuery(e.target.value)}
-              placeholder={`ค้นหาใน ${models.length} โมเดล...`}
-              className="field py-2 text-sm"
-            />
-            <div className="grid max-h-72 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
-              {filteredModels.slice(0, MODEL_PAGE_SIZE).map((m) => {
-                const active = llm.model === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => pickModel(m.id)}
-                    title={m.id}
-                    className={`rounded-lg border px-3 py-2 text-left transition ${
-                      active
-                        ? "border-sky-400 bg-sky-500/20"
-                        : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
-                    }`}
-                  >
-                    <p className="truncate text-[11px] font-semibold text-slate-100">
-                      {m.label}
-                    </p>
-                    <p className="truncate font-mono text-[10px] text-slate-500">{m.id}</p>
-                  </button>
-                );
-              })}
-            </div>
-            {filteredModels.length > MODEL_PAGE_SIZE ? (
-              <p className="text-[10px] text-slate-500">
-                แสดง {MODEL_PAGE_SIZE} จาก {filteredModels.length} รายการ — พิมพ์ค้นหาเพื่อกรองให้แคบลง
-              </p>
-            ) : null}
-            {filteredModels.length === 0 ? (
-              <p className="text-[11px] text-slate-400">ไม่มีโมเดลที่ตรงกับคำค้น</p>
-            ) : null}
-          </div>
-        ) : null}
-
-        <details className="group">
-          <summary className="cursor-pointer text-[11px] text-slate-400 hover:text-slate-200">
-            หรือพิมพ์ชื่อโมเดลเอง
-          </summary>
-          <div className="mt-2 flex gap-2">
-            <input
-              value={customModel}
-              onChange={(e) => setCustomModel(e.target.value)}
-              placeholder={suggestions[0]?.id ?? "ชื่อโมเดล"}
-              spellCheck={false}
-              className="field flex-1 py-2 text-sm"
-            />
-            <button
-              onClick={() => pickModel(customModel.trim())}
-              disabled={!customModel.trim()}
-              className="btn-ghost shrink-0 text-xs"
-            >
-              ใช้ชื่อนี้
-            </button>
-          </div>
-        </details>
-      </section>
-
-      {/* ══ ③ บันทึก ═════════════════════════════════════════════════════ */}
-      <section className="panel space-y-2 p-4">
-        <StepTitle n="3" title="บันทึกการเลือก" />
-        <p className="text-[11px] leading-relaxed text-slate-400">
-          เก็บไว้ในเบราว์เซอร์เครื่องนี้ จึงเปลี่ยนได้ทันทีแม้เป็นเว็บจริง ไม่ต้อง redeploy
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={handleSaveChoice} className="btn-primary text-sm">
-            บันทึก
-          </button>
-          <button onClick={handleResetChoice} className="btn-ghost text-sm">
-            คืนค่าเริ่มต้น
-          </button>
-        </div>
-      </section>
-
-      {/* ══ คีย์ API — พับไว้ ════════════════════════════════════════════ */}
-      <details className="panel p-4">
-        <summary className="cursor-pointer text-sm font-bold text-white">
-          🔑 คีย์ API
-          <span className="ml-2 text-[11px] font-normal text-slate-400">
-            ({cfg?.providers.filter((p) => p.ready && p.envKey).length ?? 0} เจ้าพร้อมใช้)
-          </span>
-        </summary>
-
-        <div className="mt-3 space-y-3">
-          {cfg?.passwordRequired ? (
-            <Field label="รหัสผ่านหลังบ้าน (ADMIN_PASSWORD)">
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={() => void refresh()}
-                className="field py-2 text-sm"
-              />
-            </Field>
-          ) : null}
-
-          {!cfg?.writable ? (
-            <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
-              เว็บจริงแก้คีย์ที่นี่ไม่ได้ (ระบบไฟล์เป็น read-only) — ตั้งที่{" "}
-              <b>Vercel → Settings → Environment Variables</b> แล้ว Redeploy
-              <br />
-              ⚠️ ตอนสร้างตัวแปรอย่าลืมติ๊กช่อง <b>Production</b> ไม่งั้นเว็บจริงจะมองไม่เห็น
-            </p>
-          ) : null}
-
-          {(cfg?.providers ?? [])
-            .filter((p) => p.envKey)
-            .map((p) => (
-              <Field key={p.provider} label={`${p.label} — ${p.envKey}`}>
-                <input
-                  type="password"
-                  value={keyDrafts[p.provider] ?? ""}
-                  onChange={(e) =>
-                    setKeyDrafts({ ...keyDrafts, [p.provider]: e.target.value })
-                  }
-                  placeholder={
-                    p.ready ? `ตั้งไว้แล้ว · ${p.maskedKey}` : KEY_PLACEHOLDER[p.provider]
-                  }
-                  autoComplete="off"
-                  disabled={!cfg?.writable}
-                  className="field py-2 text-sm disabled:opacity-50"
-                />
-              </Field>
-            ))}
-
-          <Field label="Ollama — OLLAMA_BASE_URL">
-            <input
-              value={ollamaUrl}
-              onChange={(e) => setOllamaUrl(e.target.value)}
-              placeholder={cfg?.ollamaBaseUrl ?? "http://127.0.0.1:11434"}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={!cfg?.writable}
-              className="field py-2 text-sm disabled:opacity-50"
-            />
-          </Field>
-
-          {cfg?.writable ? (
-            <>
-              <button
-                onClick={() => void handleSaveKeys()}
-                disabled={!keysDirty}
-                className="btn-primary w-full text-sm"
-              >
-                บันทึกลง .env.local
-              </button>
-              <p className="text-[11px] leading-relaxed text-slate-400">
-                บันทึกแล้วต้อง <b className="text-slate-200">รีสตาร์ท dev server</b>{" "}
-                (Ctrl+C แล้ว npm run dev) เพราะ Next.js อ่าน .env.local ตอนบูตเท่านั้น
-              </p>
-            </>
-          ) : null}
-        </div>
-      </details>
 
       {/* ══ ข้อมูลเทคนิค — พับไว้ ════════════════════════════════════════ */}
       <details className="panel p-4">
@@ -1312,17 +1311,6 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           ) : null}
         </div>
       </details>
-    </div>
-  );
-}
-
-function StepTitle({ n, title }: { n: string; title: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-500/25 text-[11px] font-bold text-sky-200">
-        {n}
-      </span>
-      <h2 className="text-sm font-bold text-white">{title}</h2>
     </div>
   );
 }
