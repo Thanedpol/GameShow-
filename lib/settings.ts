@@ -30,6 +30,8 @@ export interface GameSettings {
   questionSource: QuestionSource;
   /** กลุ่มฟีดที่อนุญาตให้ดึงข่าวมาตั้งคำถาม — ว่าง = ใช้ทุกกลุ่ม */
   feedGroups: string[];
+  /** โจทย์ "หาจุดผิดจากภาพ" กี่ข้อต่อเกม — 0 = ปิดภาพทั้งหมด */
+  imageCount: number;
 }
 
 export type QuestionSource = "live" | "bank";
@@ -68,6 +70,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   counts: { warmup: 7, push: 9, final: 4 },
   questionSource: "live",
   feedGroups: [...FEED_GROUP_CHOICES],
+  imageCount: 6,
 };
 
 const SETTINGS_KEY = "baijing.settings.v1";
@@ -112,6 +115,7 @@ export function normalizeSettings(raw: Partial<GameSettings> | null): GameSettin
     counts: stageRecord(raw.counts, DEFAULT_SETTINGS.counts, 0, 30),
     questionSource: raw.questionSource === "bank" ? "bank" : "live",
     feedGroups: normalizeFeedGroups(raw.feedGroups),
+    imageCount: clampNumber(raw.imageCount, 0, 10, DEFAULT_SETTINGS.imageCount),
   };
 }
 

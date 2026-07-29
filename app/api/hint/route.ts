@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     const payload: HintApiResponse = {
       revealToken: sealReveal(question.id, result.boxes),
       // ตัด truth / rationale ออกก่อนส่งให้ client
-      boxes: result.boxes.map(({ id, label, text }) => ({ id, label, text })),
+      boxes: result.boxes.map(({ id, label, text, zone }) => ({ id, label, text, zone })),
       source: result.source,
     };
     return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });

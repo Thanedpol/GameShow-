@@ -18,6 +18,7 @@ import { llmRequestPayload } from "@/lib/settings";
 import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
 import type { VoiceCritique } from "@/lib/voiceCoach";
 import type { CritiqueApiResponse } from "@/app/api/critique/route";
+import { ZONE_POSITION } from "@/lib/types";
 import type {
   GradeApiResponse,
   HintApiResponse,
@@ -34,6 +35,37 @@ type Local =
   | "rating"
   | "steal"
   | "result";
+
+/**
+ * เนื้อในกล่องคำใบ้ — เป็นข้อความเปล่า หรือข้อความ + ภาพซูมเฉพาะโซน
+ *
+ * กล่องภาพไม่ได้วาดภาพใหม่ แต่ซูมเข้าไปที่โซนหนึ่งของภาพประกอบคำถาม
+ * ประหยัดทั้งเงิน (ภาพละราว 2.4 บาท) และเวลา (อีกภาพละ 5 วินาที)
+ * โดยยังได้คำใบ้เชิงภาพจริง ๆ — กล่องจริงชี้ถูกโซน กล่องหลอกชี้ผิดโซน
+ */
+function HintBoxBody({ box, imageUrl }: { box: HintBox; imageUrl?: string }) {
+  return (
+    <>
+      <p className="mt-1.5 text-xs leading-relaxed text-white">{box.text}</p>
+      {box.zone && imageUrl ? (
+        <div className="mt-2">
+          <div className="h-24 w-full overflow-hidden rounded-lg border border-white/15">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imageUrl}
+              alt={`ซูมภาพโซน${box.zone}`}
+              style={{ objectPosition: ZONE_POSITION[box.zone] }}
+              className="h-full w-full scale-[2.2] object-cover"
+            />
+          </div>
+          <p className="mt-1 text-center text-[10px] text-sky-200/80">
+            🔍 ซูมโซน{box.zone}ของภาพ
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+}
 
 interface Outcome {
   answer: string | null;
@@ -538,6 +570,20 @@ export default function QuestionScreen() {
             {question.task}
           </p>
         ) : null}
+        {/* โจทย์หาจุดผิดจากภาพ — ภาพคือตัวโจทย์ ไม่ใช่ของประดับ จึงวางใหญ่ไว้ตรงนี้ */}
+        {question.imageUrl ? (
+          <figure className="mt-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={question.imageUrl}
+              alt="ภาพประกอบโจทย์ — หาจุดที่ผิดในภาพนี้"
+              className="w-full rounded-xl border border-stage-edge bg-white/[0.03]"
+            />
+            <figcaption className="mt-1.5 text-center text-[11px] text-slate-500">
+              ภาพนี้สร้างด้วย AI และมีจุดที่ผิดอยู่ — หาให้เจอก่อนหมดเวลา
+            </figcaption>
+          </figure>
+        ) : null}
       </div>
 
       {/* ── กล่องคำใบ้ 4 กล่อง ─────────────────────────────────────────── */}
@@ -588,7 +634,7 @@ export default function QuestionScreen() {
                     <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
                       กล่อง {b.label}
                     </span>
-                    <p className="mt-1.5 text-xs leading-relaxed text-white">{b.text}</p>
+                    <HintBoxBody box={b} imageUrl={question.imageUrl} />
                   </div>
                 );
               }
@@ -644,7 +690,7 @@ export default function QuestionScreen() {
                 <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
                   กล่อง {b.label}
                 </span>
-                <p className="mt-1.5 text-xs leading-relaxed text-white">{b.text}</p>
+                <HintBoxBody box={b} imageUrl={question.imageUrl} />
               </div>
             ))}
           </div>

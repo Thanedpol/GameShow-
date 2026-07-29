@@ -16,7 +16,7 @@ import {
   type LlmChoice,
   type LlmChoiceInput,
 } from "./llm";
-import type { HintTruth, Question, RevealedHintBox } from "./types";
+import { HINT_ZONES, type HintTruth, type Question, type RevealedHintBox } from "./types";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Reveal token — เก็บ label "จริง/หลอก" แบบ stateless (ใช้ได้บน serverless)
@@ -287,6 +287,37 @@ export interface HintBoxResult {
 }
 
 /**
+ * แจกโซนภาพให้บางกล่อง — ใช้ได้เฉพาะข้อที่มีภาพประกอบ
+ *
+ * กติกาเดียวกับจริง/หลอก คือห้ามสุดขั้ว ต้องมีทั้งกล่องภาพและกล่องข้อความ
+ * (1-3 กล่องเป็นภาพ) ถ้าเป็นภาพหมดผู้เล่นจะไม่ได้อ่านคำใบ้เชิงหลักการเลย
+ * ถ้าเป็นข้อความหมดก็ไม่ต่างจากข้ออื่นและเสียของที่วาดภาพมา
+ *
+ * กล่อง "จริง" ที่เป็นภาพจะซูมไปโซนที่มีจุดผิด ส่วนกล่อง "หลอก" ซูมไปโซนอื่น
+ * — ตรงกับความหมายของมันพอดี คำใบ้จริงชี้ถูกที่ คำใบ้หลอกชี้ผิดที่
+ */
+function assignZones(question: Question, boxes: RevealedHintBox[]): void {
+  const target = question.errorZone;
+  if (!question.imagePrompt || !target) return;
+
+  const decoys = HINT_ZONES.filter((z) => z !== target);
+  const imageCount = 1 + Math.floor(Math.random() * (boxes.length - 1)); // 1..3
+
+  // สุ่มว่ากล่องไหนจะเป็นภาพ โดยยังไม่สนว่าจริงหรือหลอก
+  const order = boxes.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+
+  for (const index of order.slice(0, imageCount)) {
+    const box = boxes[index];
+    box.zone =
+      box.truth === "จริง" ? target : decoys[Math.floor(Math.random() * decoys.length)];
+  }
+}
+
+/**
  * สร้าง 4 กล่อง โดยบังคับให้มีทั้งจริงและหลอกอย่างน้อยอย่างละ 1
  * (สัดส่วนสุ่มเป็น 1:3, 2:2 หรือ 3:1) แล้วสลับตำแหน่งก่อนติดป้าย A-D
  */
@@ -334,6 +365,8 @@ export async function generateHintBoxes(
       rationale: resolved.rationale,
     };
   });
+
+  assignZones(question, boxes);
 
   // สลับตำแหน่งก่อน แล้วค่อยติดป้าย A-D เพื่อไม่ให้เดาได้จากลำดับที่สร้าง
   for (let i = boxes.length - 1; i > 0; i -= 1) {

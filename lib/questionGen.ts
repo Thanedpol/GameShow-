@@ -4,7 +4,15 @@ import { SHARED_RULES } from "./hintEngine";
 import { callLlmJson, isChoiceReady, resolveLlm, type LlmChoiceInput } from "./llm";
 import { drawPerformanceTasks, drawSeeds, type QuestionSeed } from "./questionSeeds";
 import { harvest, type FeedGroup, type NewsItem } from "./sources";
-import type { Category, Difficulty, Question, QuestionFormat, Stage } from "./types";
+import {
+  HINT_ZONES,
+  type Category,
+  type Difficulty,
+  type HintZone,
+  type Question,
+  type QuestionFormat,
+  type Stage,
+} from "./types";
 
 /**
  * ตัวแต่งคำถามสดจากข่าวจริง
@@ -68,6 +76,20 @@ const SYSTEM = `
 - open: ต้องมี rubric บอกว่ากรรมการดูอะไร และ keyPoints 2-4 ข้อที่คำตอบดีควรมี
 - performance: ต้องมี task บอกชัดว่าผู้เล่นต้องทำอะไรบนเวทีภายในเวลาที่กำหนด และมี rubric
 
+โจทย์ "หาจุดผิดจากภาพ" (บางข้อเท่านั้น ตามที่บรีฟกำหนด):
+- ใส่ imagePrompt = คำอธิบายภาพที่จะวาด บอกข้อความไทยทุกบรรทัดที่ต้องมีในภาพ
+  แล้วระบุให้ชัดว่าจุดผิดคืออะไรและอยู่ตรงไหน
+- ตัวคำถาม (prompt) ต้องอ่านรู้เรื่องแม้ยังไม่เห็นภาพ เช่น
+  "ดูงบรายเดือนนี้แล้วบอกว่าตัวเลขบรรทัดไหนไม่สมเหตุสมผล และควรเป็นเท่าไร"
+- ใส่ errorZone บอกว่าจุดผิดอยู่โซนไหนของภาพ (บนซ้าย/บนกลาง/.../ล่างขวา)
+- ชนิดของ "จุดผิด" ที่ใช้ได้: ตัวเลขที่บวกไม่ตรง สัดส่วนที่ขัดกับข้อมูล
+  ลำดับขั้นตอนที่สลับกัน หน่วยที่ผิด กราฟที่แกนบิดเบือน ข้อความที่ขัดแย้งกันเอง
+- ⚠️ ห้ามสั่งวาดของปลอมที่เลียนแบบของจริง เช่น หน้าจอ SMS ธนาคาร อีเมลฟิชชิง
+  ใบเสร็จปลอม หรือเอกสารราชการ — โมเดลวาดภาพจะปฏิเสธ และของแบบนั้นเอาไปใช้
+  หลอกคนจริงได้ ให้ใช้ "ของที่ผิดโดยไม่ใช่ของปลอม" เช่น ตาราง กราฟ ป้ายประกาศ
+  อินโฟกราฟิก แทน
+- ข้อที่ไม่ใช่แนวนี้ ให้ส่ง imagePrompt และ errorZone เป็นค่าว่าง
+
 คำใบ้ของทุกข้อ (ต้องมีครบทั้ง real 3 และ fake 3):
   real = เบาะแสที่ถูกต้อง 100% ชี้ทางด้วยหลักการของหมวดนั้น แต่ไม่เฉลย
   fake = ประโยคเดียวสองท่อน ท่อนแรกเป็นข้อเท็จจริงที่ถูกจริง ท่อนหลังฟังดูน่าเชื่อแต่ผิด
@@ -114,6 +136,7 @@ interface BuildPromptArgs {
   tasks: string[];
   news: NewsItem[];
   avoid: string[];
+  imageCount: number;
 }
 
 function buildPrompt(args: BuildPromptArgs): string {
@@ -125,6 +148,8 @@ function buildPrompt(args: BuildPromptArgs): string {
   const lines = [
     `ช่วงของเกม: ${args.stage} — ${STAGE_BRIEF[args.stage]}`,
     `จำนวนที่ต้องแต่ง: ${args.count} ข้อ`,
+    "",
+    `ในชุดนี้ให้เป็นโจทย์ "หาจุดผิดจากภาพ" ${args.imageCount} ข้อ (ใส่ imagePrompt กับ errorZone) ที่เหลือเป็นคำถามข้อความธรรมดา`,
     "",
     "สัดส่วนรูปแบบที่ต้องได้ (ห้ามเกินห้ามขาด):",
     ...Object.entries(formatCount).map(([f, n]) => `- ${f}: ${n} ข้อ`),
@@ -198,6 +223,18 @@ const QUESTION_SCHEMA = {
             additionalProperties: false,
           },
           sourceNote: { type: "string", description: "ชื่อสำนักข่าวที่เอาประเด็นมา" },
+          imagePrompt: {
+            type: "string",
+            description:
+              "ข้อที่ให้หาจุดผิดจากภาพ: คำอธิบายภาพที่จะวาด ระบุข้อความไทยทุกบรรทัด " +
+              "และบอกให้ชัดว่าจุดผิดอยู่ตรงไหน · ข้ออื่น ๆ: \"\"",
+          },
+          errorZone: {
+            type: "string",
+            description:
+              "ข้อที่มีภาพ: จุดผิดอยู่โซนไหนของภาพ (แบ่ง 3x3) · ข้ออื่น ๆ: \"\"",
+            enum: [...HINT_ZONES, ""],
+          },
         },
         required: [
           "format",
@@ -212,6 +249,8 @@ const QUESTION_SCHEMA = {
           "explanation",
           "hints",
           "sourceNote",
+          "imagePrompt",
+          "errorZone",
         ],
         additionalProperties: false,
       },
@@ -234,6 +273,8 @@ interface RawQuestion {
   explanation?: string;
   hints?: { real?: string[]; fake?: string[] };
   sourceNote?: string;
+  imagePrompt?: string;
+  errorZone?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -282,10 +323,19 @@ export function validateQuestion(
     ? (raw.difficulty as Difficulty)
     : "กลาง";
 
+  // โจทย์ภาพต้องมีทั้งคำอธิบายภาพและตำแหน่งจุดผิด ขาดอย่างใดอย่างหนึ่ง
+  // ก็ใช้เป็นโจทย์ภาพไม่ได้ ให้ตกเป็นคำถามข้อความธรรมดาแทน
+  const imagePrompt = clean(raw.imagePrompt);
+  const errorZone = (HINT_ZONES as readonly string[]).includes(clean(raw.errorZone))
+    ? (clean(raw.errorZone) as HintZone)
+    : undefined;
+  const withImage = imagePrompt.length > 20 && errorZone ? { imagePrompt, errorZone } : {};
+
   const base = {
     // id ต้องมาจากตัวคำถามล้วน ๆ ห้ามผูกกับลำดับที่โมเดลส่งมา
     // ไม่งั้นคำถามเดิมที่โผล่มาอีกรอบจะได้ id ใหม่ แล้วความจำกันซ้ำจะจับไม่ได้
     id: `live-${stage}-${fingerprintShort(prompt)}`,
+    ...withImage,
     category,
     stage,
     difficulty,
@@ -364,6 +414,8 @@ export interface GenerateOptions {
   stages: StageRequest[];
   groups: FeedGroup[];
   avoid: string[];
+  /** อยากได้โจทย์ "หาจุดผิดจากภาพ" กี่ข้อต่อเกม */
+  imageCount: number;
   llm?: LlmChoiceInput | null;
 }
 
@@ -452,6 +504,17 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
   }
 
   const chunks = planChunks(options.stages);
+
+  /**
+   * กระจายโควตาโจทย์ภาพให้ทั่วทั้งเกม ทีละก้อนไม่เกิน 1 ข้อ
+   *
+   * ถ้าไม่กระจาย โมเดลจะกองโจทย์ภาพไว้ในก้อนเดียวจนช่วงนั้นเป็นภาพหมด
+   * ส่วนช่วงอื่นไม่มีเลย — ผู้ใช้ขอไว้ว่า "สลับไปสลับมา"
+   * เผื่อไว้เกินโควตาเล็กน้อยเพราะบางข้อจะโดนตัวตรวจตัดทิ้ง
+   */
+  const imageQuota = Math.min(options.imageCount, chunks.length);
+  const imagePlan = chunks.map((_, i) => (i < imageQuota ? 1 : 0));
+
   const results = await Promise.all(
     chunks.map(async (chunk, chunkIndex) => {
       const formatPlan = planFormats(chunk.stage, chunk.count);
@@ -470,6 +533,7 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
           tasks,
           news: rotate(news.items, chunkIndex).slice(0, 18),
           avoid: options.avoid,
+          imageCount: imagePlan[chunkIndex] ?? 0,
         }),
         schema: QUESTION_SCHEMA as unknown as Record<string, unknown>,
         // คำถามพร้อมคำใบ้ 6 อันต่อข้อกินโทเคนเยอะ เผื่อไว้มากกว่างานอื่น

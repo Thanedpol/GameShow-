@@ -700,6 +700,26 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               </p>
             </div>
 
+            <div className="border-t border-white/10 pt-3">
+              <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+                โจทย์ “หาจุดผิดจากภาพ” กี่ข้อต่อเกม
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                value={s.imageCount}
+                onChange={(e) => setS({ ...s, imageCount: Number(e.target.value) })}
+                className="field w-24 py-1.5 text-sm"
+              />
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                AI วาดภาพที่มีจุดผิดซ่อนอยู่ แล้วให้ผู้เล่นหาให้เจอ · ภาพละราว 2.4 บาท
+                ({s.imageCount} ข้อ ≈ {(s.imageCount * 2.4).toFixed(0)} บาท/เกม)
+                · ใส่ 0 เพื่อปิดภาพทั้งหมด · กล่องคำใบ้ของข้อที่มีภาพจะผสมทั้งภาพและข้อความ
+                โดยกล่องภาพคือการซูมเข้าไปที่โซนหนึ่งของภาพเดิม จึงไม่มีค่าใช้จ่ายเพิ่ม
+              </p>
+            </div>
+
             <div className="flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
               <button
                 onClick={() => void handleTrySource()}

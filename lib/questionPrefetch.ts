@@ -53,6 +53,7 @@ function settingsKey(settings: GameSettings): string {
     settings.points,
     settings.questionSource,
     settings.feedGroups,
+    settings.imageCount,
     llm.provider,
     llm.model,
     // เปลี่ยนโมเดลของงาน "แต่งคำถาม" แล้วชุดที่เตรียมไว้ต้องถูกทิ้ง
@@ -102,6 +103,7 @@ async function requestLive(settings: GameSettings): Promise<PreparedSet> {
       stages,
       groups: settings.feedGroups,
       avoid: recentTopics(40),
+      imageCount: settings.imageCount,
       llm: llmRequestPayload("questions"),
     }),
   });
@@ -125,12 +127,49 @@ async function requestLive(settings: GameSettings): Promise<PreparedSet> {
   };
 }
 
+/**
+ * รอบสอง — วาดภาพให้ข้อที่ขอไว้
+ *
+ * แยกเป็นอีก request เพราะการวาดกินเวลาเพิ่มอีก 10-15 วินาที
+ * ถ้ารวมกับรอบแรกจะทะลุเพดาน 60 วินาทีของ Vercel
+ * วาดไม่ได้ก็ปล่อยข้อนั้นเป็นคำถามข้อความธรรมดา ไม่ถือว่าล้มเหลว
+ */
+async function attachImages(questions: Question[]): Promise<Question[]> {
+  const jobs = questions
+    .filter((q) => q.imagePrompt)
+    .map((q) => ({ id: q.id, prompt: q.imagePrompt! }));
+  if (jobs.length === 0) return questions;
+
+  try {
+    const res = await fetch("/api/questions/images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobs, llm: llmRequestPayload("image") }),
+    });
+    if (!res.ok) return questions;
+
+    const data = (await res.json()) as { images?: Array<{ id: string; dataUrl: string | null }> };
+    const byId = new Map((data.images ?? []).map((i) => [i.id, i.dataUrl]));
+    return questions.map((q) => {
+      const url = byId.get(q.id);
+      // วาดไม่สำเร็จ → ถอด imagePrompt ทิ้ง ไม่งั้น UI จะรอภาพที่ไม่มีวันมา
+      if (!url) return q.imagePrompt ? { ...q, imagePrompt: undefined } : q;
+      return { ...q, imageUrl: url };
+    });
+  } catch {
+    return questions.map((q) => (q.imagePrompt ? { ...q, imagePrompt: undefined } : q));
+  }
+}
+
 async function prepare(settings: GameSettings): Promise<PreparedSet> {
   let live: PreparedSet = { questions: [], liveCount: 0, sourcesUsed: [] };
 
   if (settings.questionSource === "live") {
     try {
       live = await requestLive(settings);
+      if (settings.imageCount > 0 && live.questions.length > 0) {
+        live = { ...live, questions: await attachImages(live.questions) };
+      }
     } catch {
       // เน็ตล่มหรือ route พัง — ปล่อยให้คลังในเครื่องรับงานต่อ
       live = { questions: [], liveCount: 0, sourcesUsed: [] };

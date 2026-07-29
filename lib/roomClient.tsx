@@ -232,16 +232,35 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * ตัดของหนักออกจากสแนปช็อตก่อนส่งขึ้นห้อง
+   *
+   * ภาพโจทย์เป็น data URI ราว 450KB ต่อภาพ เกมหนึ่งมีได้ถึง 6-7 ภาพ
+   * ถ้าส่งไปทั้งก้อนจะกลายเป็นสแนปช็อต 3MB ที่ยิงขึ้น Redis ทุกครั้งที่สถานะเปลี่ยน
+   * — ทั้งเกินขนาดที่ Upstash รับไหวและกินโควตาจนหมดในไม่กี่เกม
+   *
+   * ผู้ติดตามจึงไม่เห็นภาพโจทย์ (เห็นแค่ตัวคำถามกับคำใบ้ที่เป็นข้อความ)
+   * แลกกับการที่ห้องยังทำงานได้จริง — ถ้าจะให้เห็นภาพด้วยต้องมีที่เก็บไฟล์จริง
+   * ซึ่งเกินขอบเขตของ prototype ที่ตั้งใจไม่มีฐานข้อมูล
+   */
+  const stripHeavyFields = (state: GameState): GameState => ({
+    ...state,
+    questions: state.questions.map(({ imageUrl, imagePrompt, ...rest }) =>
+      imageUrl || imagePrompt ? rest : rest,
+    ),
+  });
+
   const syncSnapshot = useCallback(
     (state: GameState) => {
       if (!session || session.role !== "host") return;
-      const serialized = JSON.stringify(state);
+      const trimmed = stripHeavyFields(state);
+      const serialized = JSON.stringify(trimmed);
       if (serialized === lastSyncRef.current) return;
       lastSyncRef.current = serialized;
       void postJson(`/api/room/${session.code}`, {
         op: "sync",
         memberId: session.memberId,
-        snapshot: state,
+        snapshot: trimmed,
       }).catch(() => {
         // ส่งไม่สำเร็จ ล้างตัวเทียบทิ้งเพื่อให้รอบหน้าลองส่งใหม่
         lastSyncRef.current = "";

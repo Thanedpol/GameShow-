@@ -31,6 +31,7 @@ interface RequestBody {
   stages?: Array<{ stage?: string; count?: number; pointValue?: number }>;
   groups?: string[];
   avoid?: string[];
+  imageCount?: number;
   llm?: LlmChoiceInput;
 }
 
@@ -104,6 +105,8 @@ export async function POST(request: NextRequest) {
       stages,
       groups: parseGroups(body.groups),
       avoid,
+      // เพดาน 10 ภาพต่อเกม — ภาพละราว 2.4 บาท ปล่อยให้ขอไม่จำกัดไม่ได้
+      imageCount: Math.min(10, Math.max(0, Math.floor(Number(body.imageCount) || 0))),
       llm: body.llm,
     });
 
