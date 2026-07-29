@@ -90,6 +90,17 @@ const SYSTEM = `
   อินโฟกราฟิก แทน
 - ข้อที่ไม่ใช่แนวนี้ ให้ส่ง imagePrompt และ errorZone เป็นค่าว่าง
 
+เฉลย (explanation) — ผู้เล่นเห็นตอนจบข้อ และเป็นจุดที่ข้อมูลผิดจะสร้างความเสียหายที่สุด:
+- ต้องบอก "ทำไม" ไม่ใช่แค่ "อะไร" — อธิบายหลักการที่ทำให้คำตอบนั้นถูก
+  เพื่อให้ผู้เล่นตรวจสอบเหตุผลได้เอง ไม่ใช่ต้องเชื่อเพราะเกมบอก
+- ยึดเฉพาะสิ่งที่แน่ใจจริง ๆ ถ้าไม่มั่นใจตัวเลขหรือชื่อเฉพาะ ให้เลี่ยงไปอธิบาย
+  ด้วยหลักการแทน ดีกว่าใส่ตัวเลขที่อาจผิด
+- ห้ามอ้างสถิติ ปี ชื่อองค์กร หรือชื่องานวิจัย ที่ไม่ได้อยู่ในข่าวที่ให้มา
+- ถ้าเรื่องนั้นมีข้อถกเถียงหรือขึ้นกับบริบท ให้บอกตรง ๆ ว่าขึ้นกับอะไร
+  อย่าฟันธงเป็นข้อเท็จจริงเดียว
+- ใส่ sourceUrl ของข่าวที่ใช้เสมอเมื่ออิงข่าวชิ้นใดชิ้นหนึ่ง โดยคัดลอกลิงก์
+  มาจากช่อง "ลิงก์:" ให้ตรงเป๊ะ ห้ามพิมพ์ขึ้นเองหรือดัดแปลง
+
 คำใบ้ของทุกข้อ (ต้องมีครบทั้ง real 3 และ fake 3):
   real = เบาะแสที่ถูกต้อง 100% ชี้ทางด้วยหลักการของหมวดนั้น แต่ไม่เฉลย
   fake = ประโยคเดียวสองท่อน ท่อนแรกเป็นข้อเท็จจริงที่ถูกจริง ท่อนหลังฟังดูน่าเชื่อแต่ผิด
@@ -112,7 +123,8 @@ function newsBlock(items: NewsItem[]): string {
     .map(
       (n, i) =>
         `[${i + 1}] (${n.source} · ${n.region}) ${n.title}` +
-        (n.summary ? `\n    ${n.summary}` : ""),
+        (n.summary ? `\n    ${n.summary}` : "") +
+        `\n    ลิงก์: ${n.link}`,
     )
     .join("\n");
 }
@@ -223,6 +235,12 @@ const QUESTION_SCHEMA = {
             additionalProperties: false,
           },
           sourceNote: { type: "string", description: "ชื่อสำนักข่าวที่เอาประเด็นมา" },
+          sourceUrl: {
+            type: "string",
+            description:
+              "ลิงก์ของข่าวที่ใช้ — ต้องคัดลอกมาจากช่อง \"ลิงก์:\" ของข่าวชิ้นนั้นเป๊ะ ๆ " +
+              "ห้ามพิมพ์ขึ้นเอง · ถ้าไม่ได้อิงข่าวชิ้นไหนให้ส่งค่าว่าง",
+          },
           imagePrompt: {
             type: "string",
             description:
@@ -249,6 +267,7 @@ const QUESTION_SCHEMA = {
           "explanation",
           "hints",
           "sourceNote",
+          "sourceUrl",
           "imagePrompt",
           "errorZone",
         ],
@@ -273,6 +292,7 @@ interface RawQuestion {
   explanation?: string;
   hints?: { real?: string[]; fake?: string[] };
   sourceNote?: string;
+  sourceUrl?: string;
   imagePrompt?: string;
   errorZone?: string;
 }
@@ -295,6 +315,14 @@ export function validateQuestion(
   raw: RawQuestion,
   stage: Stage,
   pointValue: number,
+  /**
+   * ลิงก์ข่าวที่ระบบดึงมาจริงในรอบนี้ → ชื่อสำนักข่าว
+   *
+   * ใช้เป็น allowlist ของแหล่งอ้างอิง — โมเดลแต่ง URL ที่ดูน่าเชื่อแต่ไม่มีอยู่จริง
+   * ได้ง่ายมาก และแหล่งอ้างอิงปลอมอันตรายกว่าการไม่มีแหล่งอ้างอิงเลย
+   * เพราะมันทำให้ข้อมูลผิดดูเหมือนตรวจสอบแล้ว
+   */
+  knownLinks?: Map<string, string>,
 ): Question | null {
   const prompt = clean(raw.prompt);
   if (prompt.length < 12) return null;
@@ -331,11 +359,19 @@ export function validateQuestion(
     : undefined;
   const withImage = imagePrompt.length > 20 && errorZone ? { imagePrompt, errorZone } : {};
 
+  // รับลิงก์เฉพาะที่อยู่ในชุดที่ดึงมาจริง ที่โมเดลพิมพ์เองทิ้งทั้งหมด
+  const claimedUrl = clean(raw.sourceUrl);
+  const matchedSource = claimedUrl ? knownLinks?.get(claimedUrl) : undefined;
+  const withSource = matchedSource
+    ? { sourceUrl: claimedUrl, sourceName: matchedSource }
+    : {};
+
   const base = {
     // id ต้องมาจากตัวคำถามล้วน ๆ ห้ามผูกกับลำดับที่โมเดลส่งมา
     // ไม่งั้นคำถามเดิมที่โผล่มาอีกรอบจะได้ id ใหม่ แล้วความจำกันซ้ำจะจับไม่ได้
     id: `live-${stage}-${fingerprintShort(prompt)}`,
     ...withImage,
+    ...withSource,
     category,
     stage,
     difficulty,
@@ -503,6 +539,9 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
     return { ...empty, feedsFailed: news.failed };
   }
 
+  // ตารางลิงก์จริงของรอบนี้ ใช้กรองแหล่งอ้างอิงที่โมเดลอ้างมา
+  const knownLinks = new Map(news.items.map((n) => [n.link, n.source]));
+
   const chunks = planChunks(options.stages);
 
   /**
@@ -552,7 +591,7 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
   const seen = new Set<string>();
   for (const { chunk, raws } of results) {
     for (const raw of raws) {
-      const q = validateQuestion(raw, chunk.stage, chunk.pointValue);
+      const q = validateQuestion(raw, chunk.stage, chunk.pointValue, knownLinks);
       if (!q) continue;
       const key = fingerprintShort(q.prompt);
       if (seen.has(key)) continue;

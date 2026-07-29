@@ -129,6 +129,14 @@ export interface NewsItem {
   summary: string;
   /** ชื่อสำนักข่าว — ใช้บอกผู้เล่นตอนสรุปผลว่าคำถามมาจากไหน */
   source: string;
+  /**
+   * ลิงก์บทความต้นทาง
+   *
+   * เก็บไว้เพื่อให้ผู้เล่นตามไปตรวจเองได้ว่าเฉลยที่ AI เขียนถูกจริงไหม
+   * และเป็นชุดลิงก์ "ที่มีอยู่จริง" ไว้เทียบกับลิงก์ที่โมเดลอ้าง —
+   * โมเดลแต่ง URL ปลอมได้ ซึ่งแย่กว่าการไม่มีแหล่งอ้างอิงเลย
+   */
+  link: string;
   region: string;
   group: FeedGroup;
 }
@@ -316,6 +324,56 @@ function tagContent(block: string, tag: string): string | null {
 
 const MAX_SUMMARY = 400;
 
+/**
+ * ดึงลิงก์บทความ — RSS กับ Atom เก็บคนละที่
+ *   RSS 2.0 : <link>https://...</link>
+ *   Atom    : <link rel="alternate" href="https://..." />  (แท็กเปล่า ไม่มีเนื้อใน)
+ *   RDF     : บางฟีดใช้ <guid isPermaLink="true"> เป็นลิงก์จริง
+ */
+function extractLink(block: string): string {
+  const atom = block.match(/<link[^>]*\shref="([^"]+)"[^>]*\/?>/i)?.[1];
+  const rss = tagContent(block, "link")?.trim();
+  const guid = block.match(/<guid[^>]*isPermaLink="true"[^>]*>([\s\S]*?)<\/guid>/i)?.[1];
+
+  /**
+   * บางฟีดใส่ลิงก์จริงไว้ในแท็ก <a> ข้างในหัวข้อ
+   *
+   * ฟีดของ FTC เป็นแบบนั้นเป๊ะ ๆ — ช่อง <link> มีแท็ก HTML เข้ารหัสปนจนใช้ไม่ได้
+   * ส่วน <guid isPermaLink="true"> ชี้ไปที่ consumer.ftc.gov/334905 ซึ่งกดแล้ว 404
+   * (ยืนยันด้วยการยิงจริงแล้ว) เหลือแต่ href ในหัวข้อที่เปิดได้จริง
+   */
+  const titleHref = tagContent(block, "title")?.match(/<a[^>]*\shref="([^"]+)"/i)?.[1];
+
+  for (const candidate of [rss, atom, titleHref, guid]) {
+    const url = decodeEntities((candidate ?? "").trim());
+    if (isUsableUrl(url)) return url.slice(0, 500);
+  }
+  return "";
+}
+
+/**
+ * ลิงก์ต้องเปิดได้จริง ไม่ใช่แค่ขึ้นต้นด้วย https
+ *
+ * เจอของจริงจากฟีด FTC ที่ใส่แท็ก <a href="..."> ปนมาในช่องลิงก์แบบเข้ารหัส
+ * แล้วได้ URL หน้าตาแบบ consumer.ftc.gov/%3Ca%20href%3D%22https%3A//...
+ * ซึ่งผ่านการเช็ก "ขึ้นต้นด้วย https และไม่มีช่องว่าง" ไปได้สบาย ๆ แต่กดแล้ว 404
+ *
+ * ลิงก์เสียแย่กว่าไม่มีลิงก์ เพราะเกมนี้เอาไปโชว์เป็น "แหล่งให้ไปตรวจ"
+ * ถ้ากดแล้วไม่เจออะไร ความน่าเชื่อถือของทั้งเฉลยก็หายไปด้วย
+ */
+function isUsableUrl(raw: string): boolean {
+  if (!/^https?:\/\//i.test(raw)) return false;
+  // ร่องรอยของแท็ก HTML ที่หลุดเข้ามา ทั้งแบบดิบและแบบ percent-encoded
+  if (/[<>"'\s]/.test(raw)) return false;
+  if (/%3C|%3E|%22|%27/i.test(raw)) return false;
+  try {
+    const url = new URL(raw);
+    return Boolean(url.hostname) && url.hostname.includes(".");
+  } catch {
+    return false;
+  }
+}
+
 function parseFeed(xml: string, feed: FeedSource, limit: number): NewsItem[] {
   // RSS 2.0 / RDF ใช้ <item> ส่วน Atom ใช้ <entry> — รับทั้งคู่
   const blocks = [
@@ -339,7 +397,18 @@ function parseFeed(xml: string, feed: FeedSource, limit: number): NewsItem[] {
 
     if (!isSafeItem(`${title} ${summary}`)) continue;
 
-    items.push({ title, summary, source: feed.name, region: feed.region, group: feed.group });
+    const link = extractLink(block);
+    // ไม่มีลิงก์ = ตามไปตรวจไม่ได้ ข้ามไปใช้ชิ้นอื่นดีกว่า
+    if (!link) continue;
+
+    items.push({
+      title,
+      summary,
+      link,
+      source: feed.name,
+      region: feed.region,
+      group: feed.group,
+    });
   }
   return items;
 }

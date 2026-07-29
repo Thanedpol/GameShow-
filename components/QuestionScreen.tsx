@@ -19,6 +19,7 @@ import { useSpeechInput } from "@/lib/useSpeechInput";
 import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
 import type { VoiceCritique } from "@/lib/voiceCoach";
 import type { CritiqueApiResponse } from "@/app/api/critique/route";
+import type { TranscribeApiResponse } from "@/app/api/transcribe/route";
 import { ZONE_POSITION } from "@/lib/types";
 import type {
   GradeApiResponse,
@@ -177,6 +178,7 @@ export default function QuestionScreen() {
     "off",
   );
   const [critiqueReason, setCritiqueReason] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
   const [botTurn, setBotTurn] = useState<BotTurn | null>(null);
 
   const phaseRef = useRef<Local>(phase);
@@ -193,6 +195,9 @@ export default function QuestionScreen() {
     else if (p === "steal") endSteal(false);
   });
   const { start: startTimer, stop: stopTimer } = timer;
+
+  /** ไมค์ใช้งานได้จริงไหม — ตัวตัดสินว่าข้อโชว์ต้องมีช่องพิมพ์สำรองหรือไม่ */
+  const micWorks = recorder.state === "recording" || recorder.state === "requesting";
 
   const openedBoxes = (boxes ?? []).filter((b) => openedIds.includes(b.id));
   const tokenSpent = useToken && openedIds.length > 0;
@@ -224,6 +229,7 @@ export default function QuestionScreen() {
     setCritique(null);
     setCritiqueState("off");
     setCritiqueReason(null);
+    setTranscribing(false);
     // ปล่อยไมค์ที่อาจค้างจากข้อก่อน (เช่นหมดเวลากลางการแสดงแล้วข้ามมา)
     recorder.reset();
     startTimer(stageSeconds * 1000);
@@ -432,40 +438,66 @@ export default function QuestionScreen() {
   );
 
   /**
-   * ปิดไมค์แล้วส่งคลิปให้โค้ชฟัง — ไม่บล็อกการเดินเกม
-   * ฟีดแบ็กจะไปโผล่ในหน้าสรุปผลของข้อนั้นเมื่อฟังเสร็จ
+   * ปิดไมค์แล้วใช้คลิปเดียวทำสองงานพร้อมกัน
+   *   1. ถอดเป็นข้อความ → กลายเป็น "คำตอบ" ของข้อนี้ (ต้องรอ)
+   *   2. ส่งให้โค้ชฟังแล้วให้ฟีดแบ็ก (ไม่ต้องรอ ค่อยโผล่ตอนสรุปผล)
+   *
+   * ใช้คลิปเดียวเพราะอัดซ้ำสองรอบไม่ได้ — ผู้เล่นแสดงไปแล้วรอบเดียว
    */
-  const sendClipToCoach = useCallback(async (q: NonNullable<typeof question>) => {
-    const clip = await recorder.stop();
-    if (!clip) return;
-    setCritiqueState("listening");
-    try {
-      const res = await fetch("/api/critique", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio: clip.base64,
-          mimeType: clip.mimeType,
-          task: q.task ?? q.prompt,
-          rubric: q.rubric,
-          llm: llmRequestPayload("voice"),
-        }),
-      });
-      const data = (await res.json()) as CritiqueApiResponse;
-      if (data.ok && data.critique) {
-        setCritique(data.critique);
-        setCritiqueState("done");
-      } else {
-        setCritiqueReason(data.reason ?? "ไม่ทราบสาเหตุ");
-        setCritiqueState("failed");
+  const useClipAsAnswer = useCallback(
+    async (q: NonNullable<typeof question>): Promise<string> => {
+      const clip = await recorder.stop();
+      if (!clip) return "";
+
+      // โค้ชทำงานเบื้องหลัง ไม่ให้ไปหน่วงการตรวจคำตอบ
+      setCritiqueState("listening");
+      void (async () => {
+        try {
+          const res = await fetch("/api/critique", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audio: clip.base64,
+              mimeType: clip.mimeType,
+              task: q.task ?? q.prompt,
+              rubric: q.rubric,
+              llm: llmRequestPayload("voice"),
+            }),
+          });
+          const data = (await res.json()) as CritiqueApiResponse;
+          if (data.ok && data.critique) {
+            setCritique(data.critique);
+            setCritiqueState("done");
+          } else {
+            setCritiqueReason(data.reason ?? "ไม่ทราบสาเหตุ");
+            setCritiqueState("failed");
+          }
+        } catch (e) {
+          setCritiqueReason(String(e));
+          setCritiqueState("failed");
+        }
+      })();
+
+      try {
+        const res = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio: clip.base64,
+            mimeType: clip.mimeType,
+            llm: llmRequestPayload("voice"),
+          }),
+        });
+        const data = (await res.json()) as TranscribeApiResponse;
+        return data.ok ? (data.text ?? "").trim() : "";
+      } catch {
+        return "";
       }
-    } catch (e) {
-      setCritiqueReason(String(e));
-      setCritiqueState("failed");
-    }
+    },
     // recorder.stop เป็น callback ที่นิ่ง
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    [],
+  );
 
   const finish = useCallback(
     // picked ส่งตรงมาจากปุ่มที่กด — อ่านจาก state ไม่ได้เพราะ React ยังไม่ re-render
@@ -487,15 +519,24 @@ export default function QuestionScreen() {
       // อัตนัยกับโชว์ความสามารถเดินทางเดียวกันแล้ว — พิมพ์คำตอบ แล้ว AI ตรวจตามเกณฑ์
       // ต่างกันแค่ข้อโชว์มีเสียงที่อัดไว้ให้โค้ชฟังเพิ่ม
       if (question.format === "open" || question.format === "performance") {
-        // ปิดไมค์แล้วส่งคลิปให้โค้ชฟังแบบไม่บล็อก ทำก่อนตรวจคำตอบเพื่อให้สองงานวิ่งขนานกัน
-        if (question.format === "performance") void sendClipToCoach(question);
+        stopTimer();
 
-        const answer = textRef.current.trim();
+        let answer = textRef.current.trim();
+        if (question.format === "performance") {
+          // ข้อโชว์ = เล่า/ร้อง/พูด สิ่งที่พูดคือคำตอบ ไม่ต้องให้พิมพ์ซ้ำ
+          setPhase("grading");
+          setTranscribing(true);
+          const spoken = await useClipAsAnswer(question);
+          setTranscribing(false);
+          if (spoken) answer = spoken;
+          // ถอดเสียงไม่ได้และไม่ได้พิมพ์อะไรไว้ → ถือว่าไม่ได้ตอบ
+          setText(answer);
+        }
+
         if (!answer) {
           commit({ answer: null, quality: 0, timedOut: true });
           return;
         }
-        stopTimer();
         setPhase("grading");
         try {
           const res = await fetch("/api/grade", {
@@ -529,7 +570,7 @@ export default function QuestionScreen() {
       }
 
     },
-    // sendClipToCoach กับ recorder เป็น callback ที่นิ่ง ไม่ต้องใส่ใน deps
+    // useClipAsAnswer กับ recorder เป็น callback ที่นิ่ง ไม่ต้องใส่ใน deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [question, choice, commit, stopTimer],
   );
@@ -837,53 +878,52 @@ export default function QuestionScreen() {
           ส่วนเสียงที่อัดไว้เอาไปให้โค้ชฟังเป็นฟีดแบ็กเพิ่ม ไม่ใช่ตัวให้คะแนน */}
       {phase === "performing" && !isBotTurn ? (
         <div className="space-y-2">
-          <div className="panel space-y-2 p-4">
-            <p className="text-sm text-slate-300">
-              แสดงสดได้เลย — จับเวลาอยู่ · พอจบแล้วพิมพ์สรุปสิ่งที่คุณพูด/ทำ
-              ลงในช่องด้านล่าง แล้วกดส่งให้ AI ตรวจตามเกณฑ์
-            </p>
-            {recorder.state === "recording" ? (
-              <p className="flex items-center gap-2 text-xs text-rose-200">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
-                กำลังอัดเสียงไว้ให้โค้ช AI ฟัง แล้วให้ฟีดแบ็กตอนจบข้อ
+          <div className="panel space-y-2 p-4 text-center">
+            {micWorks ? (
+              <>
+                <p className="text-sm text-slate-300">
+                  เล่า/ร้อง/พูดได้เลย — ไมค์เปิดอยู่ ระบบจะถอดสิ่งที่คุณพูดเป็นคำตอบให้เอง
+                  ไม่ต้องพิมพ์
+                </p>
+                <p className="flex items-center justify-center gap-2 text-xs text-rose-200">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
+                  กำลังฟังอยู่ · จับเวลาอยู่
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-slate-300">
+                แสดงสดได้เลย — จับเวลาอยู่ ·{" "}
+                {recorder.state === "denied"
+                  ? "ไม่ได้สิทธิ์ใช้ไมค์"
+                  : "เบราว์เซอร์นี้ใช้ไมค์ไม่ได้"}{" "}
+                จึงต้องพิมพ์สรุปสิ่งที่พูดลงช่องด้านล่างแทน
               </p>
-            ) : recorder.state === "denied" ? (
-              <p className="text-xs text-slate-500">
-                ไม่ได้สิทธิ์ใช้ไมค์ — เล่นต่อได้ตามปกติ แค่ไม่มีฟีดแบ็กจากโค้ช
-              </p>
-            ) : recorder.state === "unsupported" ? (
-              <p className="text-xs text-slate-500">
-                เบราว์เซอร์นี้อัดเสียงไม่ได้ — เล่นต่อได้ตามปกติ
-              </p>
-            ) : null}
+            )}
           </div>
 
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={5}
-            maxLength={1200}
-            placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป... (หรือกดปุ่มไมค์แล้วพูดซ้ำอีกรอบ)"
-            className="field min-h-[130px] resize-y leading-relaxed"
-          />
-          {interim ? (
-            <p className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-xs italic leading-relaxed text-sky-100">
-              🎤 {interim}
-            </p>
+          {/* ไมค์ใช้ได้ = ไม่ต้องมีช่องพิมพ์ให้เกะกะ ผู้เล่นแค่เล่าแล้วกดจบ
+              ช่องพิมพ์โผล่เฉพาะตอนไมค์ใช้ไม่ได้ ซึ่งเป็นทางสำรองล้วน ๆ */}
+          {!micWorks ? (
+            <>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={5}
+                maxLength={1200}
+                placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป..."
+                className="field min-h-[130px] resize-y leading-relaxed"
+              />
+              <span className="text-[11px] text-slate-500">{text.length}/1200</span>
+            </>
           ) : null}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-slate-500">{text.length}/1200</span>
-            <div className="flex items-center gap-2">
-              <MicButton onAppend={appendSpoken} onInterim={setInterim} />
-              <button
-                onClick={() => void finish(false)}
-                disabled={!text.trim()}
-                className="btn-teal px-6 py-2.5 text-sm"
-              >
-                จบการแสดง → ส่งให้ตรวจ
-              </button>
-            </div>
-          </div>
+
+          <button
+            onClick={() => void finish(false)}
+            disabled={!micWorks && !text.trim()}
+            className="btn-teal w-full py-4 text-lg disabled:opacity-50"
+          >
+            จบการแสดง → ส่งให้ตรวจ
+          </button>
         </div>
       ) : null}
 
@@ -892,7 +932,11 @@ export default function QuestionScreen() {
       {phase === "grading" ? (
         <div className="panel flex flex-col items-center gap-3 p-8 text-center">
           <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-sky-300" />
-          <p className="text-sm text-slate-300">AI กำลังตรวจคำตอบตามเกณฑ์ของข้อนี้...</p>
+          <p className="text-sm text-slate-300">
+            {transcribing
+              ? "กำลังถอดสิ่งที่คุณพูดเป็นข้อความ..."
+              : "AI กำลังตรวจคำตอบตามเกณฑ์ของข้อนี้..."}
+          </p>
         </div>
       ) : null}
 
@@ -985,6 +1029,25 @@ export default function QuestionScreen() {
             {question.explanation ? (
               <p className="mt-2 text-sm leading-relaxed text-slate-400">
                 {question.explanation}
+              </p>
+            ) : null}
+
+            {/* ── ที่มาของประเด็น ─────────────────────────────────────────────
+                คำถามกับเฉลยเขียนโดย AI ซึ่งพลาดได้ ถ้าไม่มีทางตรวจ ผู้เล่นก็ได้แต่
+                เชื่อไปเรื่อย ๆ ซึ่งขัดกับแก่นของเกมที่สอนให้ตรวจสอบก่อนเชื่อ
+                ลิงก์ตรงนี้ผ่านการเทียบกับชุดข่าวที่ระบบดึงมาจริงแล้ว ไม่ใช่ที่ AI พิมพ์เอง */}
+            {question.sourceUrl ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                ที่มาของประเด็น:{" "}
+                <a
+                  href={question.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="text-sky-300 underline hover:text-sky-200"
+                >
+                  {question.sourceName ?? "อ่านต้นทาง"} ↗
+                </a>{" "}
+                — เฉลยเขียนโดย AI ถ้าเห็นว่าไม่ตรง ให้ยึดต้นทางเป็นหลัก
               </p>
             ) : null}
 

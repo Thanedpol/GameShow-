@@ -1,5 +1,5 @@
 import { QUESTION_BANK } from "./questions";
-import type { Question, Stage } from "./types";
+import { HINT_ZONES, type Question, type Stage } from "./types";
 
 /**
  * ค่าที่ปรับได้จากหลังบ้าน (/admin)
@@ -454,7 +454,38 @@ export function sanitizeQuestion(input: unknown): Question | null {
     task: typeof q.task === "string" ? q.task : undefined,
     explanation: typeof q.explanation === "string" ? q.explanation : undefined,
     hints: sanitizeHints(q.hints),
+    sourceName: typeof q.sourceName === "string" ? q.sourceName.slice(0, 120) : undefined,
+    sourceUrl: safeHref(q.sourceUrl),
+    imagePrompt: typeof q.imagePrompt === "string" ? q.imagePrompt.slice(0, 1200) : undefined,
+    errorZone: (HINT_ZONES as readonly string[]).includes(q.errorZone as string)
+      ? (q.errorZone as Question["errorZone"])
+      : undefined,
+    imageUrl: safeImageSrc(q.imageUrl),
   };
+}
+
+/**
+ * ลิงก์ที่จะถูกเอาไปใส่ `<a href>` — รับเฉพาะ http/https เท่านั้น
+ *
+ * คำถามมาจาก localStorage ซึ่งแก้มือได้ ถ้าปล่อยให้ผ่านทุกสตริงจะเปิดช่องให้
+ * `javascript:` กลายเป็นลิงก์ที่รันโค้ดตอนผู้เล่นกด
+ */
+function safeHref(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** ภาพโจทย์เป็น data URI ที่ระบบสร้างเอง หรือ https — ไม่รับ scheme อื่น */
+function safeImageSrc(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const src = value.trim();
+  if (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(src)) return src;
+  return src.startsWith("https://") ? src : undefined;
 }
 
 const asLines = (v: unknown): string[] =>
