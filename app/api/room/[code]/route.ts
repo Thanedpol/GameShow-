@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import {
+  DRAFT_STALE_MS,
+  MAX_DRAFT_LENGTH,
   MAX_INTENT_LENGTH,
   activeMembers,
   cleanName,
@@ -8,6 +10,7 @@ import {
   isRoomCode,
   normalizeRoomCode,
   retainedMembers,
+  type RoomDraft,
   type RoomIntent,
   type RoomLive,
   type RoomMember,
@@ -17,8 +20,10 @@ import {
 import {
   clearIntents,
   getRoom,
+  listDrafts,
   listIntents,
   pushIntent,
+  saveDraft,
   restoreRoom,
   roomBackend,
   saveRoom,
@@ -34,6 +39,7 @@ export const dynamic = "force-dynamic";
  *   op = "join"    เข้าห้อง (หรือกลับเข้ามาใหม่ด้วย memberId เดิม)
  *      | "sync"    เจ้าภาพส่งสแนปช็อตสถานะเกมขึ้นห้อง
  *      | "intent"  ผู้เล่นอื่นส่งข้อเสนอไปขึ้นจอเจ้าภาพ
+ *      | "draft"   ส่งข้อความที่กำลังพิมพ์อยู่ให้คนอื่นเห็น (ยังไม่กดส่ง)
  *      | "clear"   เจ้าภาพล้างข้อเสนอที่อ่านแล้วทิ้ง
  *      | "leave"   ออกจากห้อง
  *      | "restore" เจ้าภาพปลุกห้องที่เซิร์ฟเวอร์ลืมไปกลับมา (ดู restoreRoom)
@@ -53,13 +59,24 @@ async function readCode(params: Params["params"]): Promise<string | null> {
   return isRoomCode(normalized) ? normalized : null;
 }
 
-async function buildView(room: RoomRecord): Promise<RoomView> {
+/**
+ * `withDrafts` ต้องขอมาเป็นครั้ง ๆ ไม่ใช่ส่งให้ตลอด
+ *
+ * การอ่าน draft เพิ่ม HGETALL อีกหนึ่งคำสั่งต่อการ poll หนึ่งครั้ง ซึ่งเท่ากับ
+ * +50% ของโควตา Redis ทั้งเกม (วัดไว้ว่าเกมหนึ่งกิน ~2,500 คำสั่ง)
+ * ฝั่ง client จึงขอเฉพาะตอนที่กำลังตอบข้ออยู่จริง ช่วงเฉลย/ตรวจ/รอเริ่มไม่ต้องขอ
+ */
+async function buildView(room: RoomRecord, withDrafts = false): Promise<RoomView> {
   // ดึง hostId ออกทิ้งตรงนี้ที่เดียว — ดู RoomView ใน lib/room.ts ว่าทำไม
   const { hostId: _hostId, ...rest } = room;
+  const now = Date.now();
   return {
     ...rest,
-    members: activeMembers(room.members, Date.now()),
+    members: activeMembers(room.members, now),
     intents: await listIntents(room.code),
+    drafts: withDrafts
+      ? (await listDrafts(room.code)).filter((d) => now - d.at < DRAFT_STALE_MS)
+      : [],
     backend: roomBackend(),
   };
 }
@@ -86,7 +103,8 @@ export async function GET(request: NextRequest, { params }: Params) {
   if (touchMember(room, request.nextUrl.searchParams.get("memberId"))) {
     await saveRoom(room);
   }
-  return NextResponse.json(await buildView(room), noStore);
+  const withDrafts = request.nextUrl.searchParams.get("drafts") === "1";
+  return NextResponse.json(await buildView(room, withDrafts), noStore);
 }
 
 interface OpBody {
@@ -260,6 +278,33 @@ export async function POST(request: NextRequest, { params }: Params) {
       room.updatedAt = now;
       room.version += 1;
       await saveRoom(room);
+      return NextResponse.json({ ok: true }, noStore);
+    }
+
+    case "draft": {
+      const member = memberId ? room.members.find((m) => m.id === memberId) : undefined;
+      if (!member) {
+        return NextResponse.json({ error: "ยังไม่ได้เข้าห้องนี้" }, { status: 403 });
+      }
+
+      const draft: RoomDraft = {
+        memberId: member.id,
+        memberName: member.name,
+        // ข้อความว่างเป็นค่าที่ถูกต้อง แปลว่า "ลบ draft ของฉันทิ้ง" ไม่ใช่ error
+        text: cleanText(body.text, MAX_DRAFT_LENGTH) ?? "",
+        questionId: typeof body.questionId === "string" ? body.questionId : null,
+        at: now,
+      };
+      await saveDraft(code, draft);
+
+      /**
+       * ⚠️ ห้ามเรียก saveRoom() ใน op นี้ ทั้งที่ op อื่นเรียกกันหมด
+       *
+       * draft ถูกยิงถี่ (ทุกวินาทีระหว่างพิมพ์) ถ้าเขียน RoomRecord ตามไปด้วย
+       * จะไปแข่งเขียนทับกับสแนปช็อตของเจ้าภาพที่ยิงพร้อมกันอยู่ ซึ่งเป็นเหตุผล
+       * เดียวกับที่ draft ต้องแยก key ตั้งแต่แรก · ไม่อัปเดต lastSeen ด้วย
+       * เพราะการ poll ปกติทำให้อยู่แล้ว
+       */
       return NextResponse.json({ ok: true }, noStore);
     }
 

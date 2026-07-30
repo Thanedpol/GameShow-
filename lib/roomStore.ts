@@ -5,6 +5,7 @@ import {
   ROOM_CODE_ALPHABET,
   ROOM_CODE_LENGTH,
   type RoomBackend,
+  type RoomDraft,
   type RoomIntent,
   type RoomRecord,
 } from "./room";
@@ -111,6 +112,8 @@ async function redis<T>(command: unknown[]): Promise<T> {
 interface MemoryEntry {
   room: RoomRecord;
   intents: RoomIntent[];
+  /** memberId → draft — เก็บเป็น map เพราะแต่ละคนมี draft ได้อันเดียว */
+  drafts: Map<string, RoomDraft>;
   expiresAt: number;
 }
 
@@ -143,6 +146,15 @@ function touchMemory(entry: MemoryEntry): MemoryEntry {
 
 const roomKey = (code: string) => `baijing:room:${code}`;
 const intentKey = (code: string) => `baijing:room:${code}:intents`;
+/**
+ * draft แยก key เหมือน intents และด้วยเหตุผลเดียวกัน — `op: "sync"` ของเจ้าภาพ
+ * อ่าน RoomRecord ทั้งก้อนมาแก้แล้วเขียนทับ ถ้า draft อยู่ในนั้นด้วย
+ * ของที่เพื่อนเพิ่งพิมพ์จะโดนสแนปช็อตของเจ้าภาพทับหายเป็นระยะแบบสุ่ม
+ *
+ * ใช้ hash ไม่ใช่ list เพราะแต่ละคนมี draft ได้อันเดียวและต้องเขียนทับของตัวเอง
+ * เรื่อย ๆ — HSET แตะเฉพาะช่องของตัวเอง ไม่ยุ่งกับของคนอื่นเลย
+ */
+const draftKey = (code: string) => `baijing:room:${code}:drafts`;
 
 export async function getRoom(code: string): Promise<RoomRecord | null> {
   if (roomBackend() === "memory") return readMemory(code)?.room ?? null;
@@ -164,6 +176,7 @@ export async function saveRoom(room: RoomRecord): Promise<void> {
       touchMemory({
         room,
         intents: existing?.intents ?? [],
+        drafts: existing?.drafts ?? new Map(),
         expiresAt: Date.now() + TTL_SECONDS * 1000,
       }),
     );
@@ -188,6 +201,7 @@ export async function restoreRoom(room: RoomRecord): Promise<boolean> {
     memoryStore.set(room.code, {
       room,
       intents: [],
+      drafts: new Map(),
       expiresAt: Date.now() + TTL_SECONDS * 1000,
     });
     return true;
@@ -212,6 +226,7 @@ export async function deleteRoom(code: string): Promise<void> {
   }
   await redis(["DEL", roomKey(code)]);
   await redis(["DEL", intentKey(code)]);
+  await redis(["DEL", draftKey(code)]);
 }
 
 /**
@@ -256,6 +271,60 @@ export async function clearIntents(code: string): Promise<void> {
     return;
   }
   await redis(["DEL", intentKey(code)]);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ข้อความที่กำลังพิมพ์ (draft)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** ข้อความว่าง = ลบทิ้ง ไม่ใช่เก็บสตริงว่างไว้ให้ฝั่งอ่านต้องมากรองเอง */
+export async function saveDraft(code: string, draft: RoomDraft): Promise<void> {
+  const empty = draft.text.length === 0;
+
+  if (roomBackend() === "memory") {
+    const entry = readMemory(code);
+    if (!entry) return;
+    if (empty) entry.drafts.delete(draft.memberId);
+    else entry.drafts.set(draft.memberId, draft);
+    touchMemory(entry);
+    return;
+  }
+
+  if (empty) {
+    await redis(["HDEL", draftKey(code), draft.memberId]);
+    return;
+  }
+  await redis(["HSET", draftKey(code), draft.memberId, JSON.stringify(draft)]);
+  await redis(["EXPIRE", draftKey(code), TTL_SECONDS]);
+}
+
+export async function listDrafts(code: string): Promise<RoomDraft[]> {
+  if (roomBackend() === "memory") {
+    return [...(readMemory(code)?.drafts.values() ?? [])];
+  }
+
+  /**
+   * HGETALL ของ Upstash REST คืนมาเป็นอาร์เรย์แบน [field, value, field, value, ...]
+   * ไม่ใช่ object แบบที่ client library ทั่วไปแปลงให้ จึงต้องหยิบทีละคู่เอง
+   */
+  const raw = await redis<string[] | null>(["HGETALL", draftKey(code)]);
+  const out: RoomDraft[] = [];
+  for (let i = 1; i < (raw?.length ?? 0); i += 2) {
+    try {
+      out.push(JSON.parse(raw![i]) as RoomDraft);
+    } catch {
+      /* ข้ามช่องที่เสีย ไม่ให้ draft พังอันเดียวทำให้ทั้งห้องอ่านไม่ได้ */
+    }
+  }
+  return out;
+}
+
+export async function clearDrafts(code: string): Promise<void> {
+  if (roomBackend() === "memory") {
+    readMemory(code)?.drafts.clear();
+    return;
+  }
+  await redis(["DEL", draftKey(code)]);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

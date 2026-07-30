@@ -90,6 +90,33 @@ export interface RoomRecord {
 export type RoomBackend = "redis" | "memory";
 
 /**
+ * ข้อความที่สมาชิกคนหนึ่งกำลังพิมพ์อยู่ ณ ตอนนี้ (ยังไม่กดส่ง)
+ *
+ * ต่างจาก RoomIntent ตรงที่ intent คือของที่ "ส่งแล้ว" เก็บสะสมเป็นรายการ
+ * ส่วน draft คือของที่ "กำลังพิมพ์" มีได้คนละอันเดียวและถูกเขียนทับเรื่อย ๆ
+ * มีไว้ให้ทีมเห็นว่าอีกฝ่ายเขียนถึงไหนแล้ว จะได้ไม่พิมพ์เรื่องเดียวกันซ้อนกัน
+ */
+export interface RoomDraft {
+  memberId: string;
+  memberName: string;
+  text: string;
+  /** ผูกกับข้อไหน — กัน draft ค้างจากข้อก่อนโผล่ในข้อใหม่ */
+  questionId: string | null;
+  at: number;
+}
+
+/**
+ * ไม่มีอัปเดตเกินเท่านี้ = เลิกพิมพ์ไปแล้ว (หรือปิดแท็บหนี) ให้เลิกโชว์
+ *
+ * ต้องมากกว่าจังหวะส่ง (1 วิ) กับจังหวะ poll (1.5 วิ) รวมกันพอสมควร
+ * ไม่งั้นข้อความจะกะพริบหาย ๆ โผล่ ๆ ระหว่างที่คนยังพิมพ์อยู่จริง
+ */
+export const DRAFT_STALE_MS = 10_000;
+
+/** ความยาวสูงสุดของ draft — เท่ากับเพดานช่องพิมพ์คำตอบจริง */
+export const MAX_DRAFT_LENGTH = 1200;
+
+/**
  * สิ่งที่ส่งกลับไปให้ทุกเครื่องในห้อง — ตัด `hostId` ออกโดยตั้งใจ
  *
  * `hostId` ทำหน้าที่เป็นรหัสผ่านของเจ้าภาพ (ใช้ยืนยันตอน sync/clear/restore)
@@ -98,6 +125,8 @@ export type RoomBackend = "redis" | "memory";
  */
 export interface RoomView extends Omit<RoomRecord, "hostId"> {
   intents: RoomIntent[];
+  /** ข้อความที่แต่ละคนกำลังพิมพ์ — ว่างเสมอถ้า client ไม่ได้ขอมาด้วย ?drafts=1 */
+  drafts: RoomDraft[];
   /** สถานะที่เก็บของเซิร์ฟเวอร์ ใช้เตือนเมื่อยังไม่ได้ต่อ Redis */
   backend: RoomBackend;
 }

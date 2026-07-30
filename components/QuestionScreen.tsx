@@ -172,6 +172,48 @@ function ActionBar({
   );
 }
 
+/**
+ * ข้อความที่เพื่อนร่วมทีมกำลังพิมพ์อยู่ตอนนี้ พร้อมปุ่มดึงมาต่อท้ายของตัวเอง
+ *
+ * ต่างจาก TeammateNotes ที่แสดงของที่ "ส่งแล้ว" — อันนี้คือของที่ยังพิมพ์ไม่จบ
+ * มีไว้ให้เห็นว่าอีกฝ่ายเขียนถึงไหน จะได้ไม่พิมพ์เรื่องเดียวกันซ้อนกัน
+ * ตามหลังจริงราว 1-2 วินาทีเพราะระบบ poll ทุก 1.5 วิ ไม่ใช่ทีละตัวอักษร
+ */
+function LiveDrafts({
+  questionId,
+  onUse,
+}: {
+  questionId: string;
+  onUse: (text: string) => void;
+}) {
+  const { drafts } = useRoom();
+  const current = drafts.filter((d) => d.questionId === questionId && d.text.trim());
+  if (current.length === 0) return null;
+
+  return (
+    <section className="space-y-2 rounded-xl border border-teal-300/35 bg-teal-400/[0.07] p-3">
+      <h3 className="text-xs font-bold text-teal-200">
+        <span className="mr-1 inline-block animate-pulse">✍️</span>
+        กำลังพิมพ์อยู่ตอนนี้
+      </h3>
+      {current.map((d) => (
+        <div key={d.memberId} className="rounded-lg border border-stage-edge bg-white/[0.04] p-2.5">
+          <p className="text-xs">
+            <span className="font-semibold text-teal-200">{d.memberName}:</span>{" "}
+            <span className="text-slate-100">{d.text}</span>
+          </p>
+          <button
+            onClick={() => onUse(d.text)}
+            className="btn-ghost mt-1.5 w-full text-xs"
+          >
+            ↓ ดึงข้อความนี้มาใช้ต่อ
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 interface Outcome {
   answer: string | null;
   quality: number;
@@ -185,7 +227,7 @@ interface Outcome {
 
 export default function QuestionScreen() {
   const { state, dispatch } = useGame();
-  const { isHost, syncLive } = useRoom();
+  const { isHost, syncLive, session, sendDraft } = useRoom();
   const question = state.questions[state.currentQuestionIndex];
 
   /**
@@ -237,6 +279,19 @@ export default function QuestionScreen() {
   // นาฬิกาถูกสร้างก่อน loadReveal จึงอ่านโทเคนผ่าน ref แทนตัวแปรตรง ๆ
   const revealTokenRef = useRef<string | null>(null);
   const nextBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  /**
+   * กระจายข้อความที่เจ้าภาพกำลังพิมพ์ให้เพื่อนร่วมทีมเห็น และขอของเขามาด้วย
+   *
+   * เปิดเฉพาะช่วงที่กำลังตอบจริง ๆ — ช่วงเฉลย/ตรวจ/ชิงกดตอบไม่ต้องดึง
+   * เพราะการดึง draft เพิ่มคำสั่ง Redis อีกหนึ่งครั้งต่อการ poll หนึ่งรอบ
+   * ถ้าเปิดทิ้งไว้ทั้งเกมจะกินโควตาเพิ่มราวครึ่งหนึ่งโดยไม่ได้ใช้
+   */
+  const answering = phase === "answering" || phase === "performing";
+  useEffect(() => {
+    if (!session || !question) return;
+    sendDraft(answering ? text : "", question.id);
+  }, [session, question, answering, text, sendDraft]);
 
   // เดินตัวนับเฉพาะตอนกำลังตรวจ แล้วรีเซ็ตเมื่อออกจากช่วงนั้น
   useEffect(() => {
@@ -891,7 +946,10 @@ export default function QuestionScreen() {
 
       {/* ── ข้อเสนอจากเพื่อนร่วมทีมที่ใช้อีกเครื่อง ─────────────────────── */}
       {phase === "answering" || phase === "performing" ? (
-        <TeammateNotes questionId={question.id} />
+        <div className="space-y-2">
+          <LiveDrafts questionId={question.id} onUse={appendSpoken} />
+          <TeammateNotes questionId={question.id} />
+        </div>
       ) : null}
 
       {/* ── ชิงกดตอบ ────────────────────────────────────────────────────── */}

@@ -14,6 +14,7 @@ import {
   isRoomCode,
   normalizeRoomCode,
   type RoomBackend,
+  type RoomDraft,
   type RoomIntent,
   type RoomLive,
   type RoomMember,
@@ -40,6 +41,15 @@ const POLL_MS = 1500;
  * ซึ่งทำให้ทั้งทีมหลุดจากห้องกลางเกมโดยที่ไม่มีใครทำอะไรผิด
  */
 const ROOM_GRACE_MS = 30_000;
+
+/**
+ * ส่งข้อความที่กำลังพิมพ์ได้ไม่เกิน 1 ครั้งต่อวินาที
+ *
+ * คนพิมพ์เร็ว ๆ ยิงได้เป็นสิบครั้งต่อวินาทีถ้าไม่หน่วง ซึ่งกินโควตา Redis
+ * โดยไม่ได้อะไรเพิ่ม เพราะอีกฝั่งก็ poll ทุก 1.5 วินาทีอยู่ดี
+ * มองไม่เห็นความต่างระหว่างส่งทุกตัวอักษรกับส่งวินาทีละครั้ง
+ */
+const DRAFT_SEND_MS = 1_000;
 
 export type RoomRole = "host" | "guest";
 
@@ -90,6 +100,8 @@ export interface RoomContextValue {
   room: RoomView | null;
   members: RoomMember[];
   intents: RoomIntent[];
+  /** ข้อความที่คนอื่นกำลังพิมพ์ — ว่างเมื่อไม่ได้อยู่ในช่วงตอบ */
+  drafts: RoomDraft[];
   backend: RoomBackend | null;
   error: string | null;
   busy: boolean;
@@ -106,6 +118,11 @@ export interface RoomContextValue {
   syncSnapshot: (state: GameState) => void;
   syncLive: (live: RoomLive) => void;
   sendIntent: (text: string, questionId: string | null) => Promise<boolean>;
+  /**
+   * กระจายข้อความที่กำลังพิมพ์ให้คนอื่นเห็น · ข้อความว่าง = ลบของตัวเองทิ้ง
+   * ฝั่งรับ provider เปิดให้เองเมื่อห้องอยู่ในช่วงตอบข้อ ไม่ต้องสั่งเพิ่ม
+   */
+  sendDraft: (text: string, questionId: string | null) => void;
   clearIntents: () => Promise<void>;
 }
 
@@ -131,6 +148,15 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   const missingSinceRef = useRef<number | null>(null);
   /** กันไม่ให้ยิงขอที่นั่งคืนรัว ๆ ทุกรอบ poll ตอนที่ห้องเต็มหรือเซิร์ฟเวอร์ไม่ยอมรับ */
   const rejoinAtRef = useRef<number>(0);
+
+  // ── ข้อความที่กำลังพิมพ์ ──────────────────────────────────────────────────
+  /**
+   * เก็บเป็น ref ไม่ใช่ state เพราะทั้งสามตัวถูกอ่าน/เขียนจากใน timer
+   * ถ้าใช้ state จะต้องผูก dependency ใหม่ทุกครั้งที่พิมพ์ ซึ่งรีเซ็ต timer ทิ้ง
+   */
+  const draftTextRef = useRef<string>("");
+  const draftQuestionRef = useRef<string | null>(null);
+  const draftSentRef = useRef<string>("");
 
   useEffect(() => {
     setSession(readSession());
@@ -171,6 +197,20 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * ดึง draft เฉพาะตอนที่ห้องกำลังตอบข้ออยู่ — provider ตัดสินเอง
+   *
+   * เดิมให้ลูกคอมโพเนนต์เป็นคนสั่งเปิด/ปิดผ่าน setDraftsWanted แต่พึ่งพาการที่
+   * ทั้ง QuestionScreen และ FollowerScreen ต้องเรียกให้ถูกจังหวะ ซึ่งดีบั๊กยากมาก
+   * เวลามันไม่ทำงาน (ต้องไล่ว่าใครเรียก ตอนไหน state ไปถึงไหนแล้ว)
+   *
+   * provider มี room.live อยู่ในมือแล้ว จึงรู้เองได้ว่ากำลังตอบข้ออยู่ไหม
+   * แหล่งความจริงเดียว ไม่ต้องประสานข้ามคอมโพเนนต์ และประหยัดโควตาเท่าเดิม
+   */
+  const liveStep = room?.live?.step;
+  const draftsWantedRef = useRef(false);
+  draftsWantedRef.current = liveStep === "answering" || liveStep === "performing";
+
   // ── poll สถานะห้อง ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) {
@@ -187,7 +227,8 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     const tick = async (afterRevive = false) => {
       try {
         const res = await fetch(
-          `/api/room/${session.code}?memberId=${encodeURIComponent(session.memberId)}`,
+          `/api/room/${session.code}?memberId=${encodeURIComponent(session.memberId)}` +
+            (draftsWantedRef.current ? "&drafts=1" : ""),
           { cache: "no-store" },
         );
         if (stopped) return;
@@ -454,6 +495,43 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     [session],
   );
 
+  /**
+   * เก็บข้อความไว้เฉย ๆ แล้วให้ timer เป็นคนส่ง — ไม่ยิงทันทีที่พิมพ์
+   * ตัวจับเวลาด้านล่างจะส่งให้วินาทีละครั้งเฉพาะตอนที่ข้อความเปลี่ยนจริง
+   */
+  const sendDraft = useCallback((text: string, questionId: string | null) => {
+    draftTextRef.current = text;
+    draftQuestionRef.current = questionId;
+  }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    const timer = window.setInterval(() => {
+      const text = draftTextRef.current.trim().slice(0, 1200);
+      const questionId = draftQuestionRef.current;
+      /**
+       * ตัวเทียบต้องรวม questionId ด้วย ไม่ใช่เทียบแค่ข้อความ
+       *
+       * ช่องพิมพ์ของผู้ติดตามไม่ได้ถูกล้างตอนขึ้นข้อใหม่ ถ้าเทียบแค่ข้อความ
+       * พอเปลี่ยนข้อแล้วข้อความเท่าเดิม ระบบจะไม่ส่งอะไรเลย draft บนเซิร์ฟเวอร์
+       * จึงค้างติดหมายเลขข้อเก่า แล้วโดนตัวกรองฝั่งแสดงผลทิ้งทั้งที่คนยังพิมพ์อยู่จริง
+       */
+      const key = `${questionId ?? ""}\n${text}`;
+      if (key === draftSentRef.current) return;
+      draftSentRef.current = key;
+      void postJson(`/api/room/${session.code}`, {
+        op: "draft",
+        memberId: session.memberId,
+        text,
+        questionId,
+      }).catch(() => {
+        // ส่งไม่สำเร็จ ล้างตัวเทียบเพื่อให้รอบหน้าลองใหม่
+        draftSentRef.current = "";
+      });
+    }, DRAFT_SEND_MS);
+    return () => window.clearInterval(timer);
+  }, [session]);
+
   const clearIntents = useCallback(async () => {
     if (!session || session.role !== "host") return;
     try {
@@ -472,6 +550,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       room,
       members: room?.members ?? [],
       intents: room?.intents ?? [],
+      drafts: (room?.drafts ?? []).filter((d) => d.memberId !== session?.memberId),
       backend: room?.backend ?? null,
       error,
       busy,
@@ -485,6 +564,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       syncSnapshot,
       syncLive,
       sendIntent,
+      sendDraft,
       clearIntents,
     }),
     [
@@ -499,6 +579,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       syncSnapshot,
       syncLive,
       sendIntent,
+      sendDraft,
       clearIntents,
     ],
   );

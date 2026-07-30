@@ -15,7 +15,7 @@ import { STAGE_LABEL, rankParticipants } from "@/lib/scoring";
  * จะได้ไม่เกิดกรณีสองคนกดพร้อมกันแล้วคะแนนเพี้ยน
  */
 export default function FollowerScreen() {
-  const { snapshot, live, sendIntent, session } = useRoom();
+  const { snapshot, live, sendIntent, session, drafts, sendDraft } = useRoom();
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -31,6 +31,27 @@ export default function FollowerScreen() {
     snapshot && snapshot.questions.length > 0
       ? snapshot.questions[snapshot.currentQuestionIndex]
       : null;
+
+  /**
+   * เปิดรับ draft ของคนอื่นเฉพาะตอนที่กำลังเล่นข้ออยู่ และกระจายของตัวเองออกไป
+   * ช่วงเฉลย/รอเริ่มเกมไม่ต้องดึง เพราะกินคำสั่ง Redis เพิ่มโดยไม่ได้ใช้
+   */
+  const answering = live?.step === "answering" || live?.step === "performing";
+  useEffect(() => {
+    sendDraft(answering ? draft : "", question?.id ?? null);
+  }, [answering, draft, question?.id, sendDraft]);
+
+  const liveDrafts = drafts.filter(
+    (d) => d.questionId === (question?.id ?? null) && d.text.trim(),
+  );
+
+  /** ต่อท้ายของเดิม ไม่ทับ — ผู้เล่นอาจพิมพ์ค้างไว้แล้ว (ตรรกะเดียวกับ appendSpoken) */
+  function useDraftText(text: string) {
+    setDraft((prev) => {
+      const joined = prev.trim() ? `${prev.trim()} ${text.trim()}` : text.trim();
+      return joined.slice(0, MAX_INTENT_LENGTH);
+    });
+  }
 
   async function handleSend() {
     const text = draft.trim();
@@ -197,6 +218,30 @@ export default function FollowerScreen() {
       ) : null}
 
       <TeammateNotes questionId={question?.id ?? ""} />
+
+      {/* ข้อความที่คนอื่นกำลังพิมพ์อยู่ตอนนี้ */}
+      {liveDrafts.length > 0 ? (
+        <section className="space-y-2 rounded-xl border border-teal-300/35 bg-teal-400/[0.07] p-3">
+          <h2 className="text-xs font-bold text-teal-200">
+            <span className="mr-1 inline-block animate-pulse">✍️</span>
+            กำลังพิมพ์อยู่ตอนนี้
+          </h2>
+          {liveDrafts.map((d) => (
+            <div
+              key={d.memberId}
+              className="rounded-lg border border-stage-edge bg-white/[0.04] p-2.5"
+            >
+              <p className="text-xs">
+                <span className="font-semibold text-teal-200">{d.memberName}:</span>{" "}
+                <span className="text-slate-100">{d.text}</span>
+              </p>
+              <button onClick={() => useDraftText(d.text)} className="btn-ghost mt-1.5 w-full text-xs">
+                ↓ ดึงข้อความนี้มาใช้ต่อ
+              </button>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       {/* ส่งความคิดให้คนที่กดตอบ */}
       <section className="panel space-y-2 p-3">
