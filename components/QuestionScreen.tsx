@@ -10,6 +10,7 @@ import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
 import { STAGE_LABEL, hintMultiplier } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
 import { takeHints, warmHints } from "@/lib/hintPrefetch";
+import { shrinkImage } from "@/lib/shrinkImage";
 import { llmRequestPayload } from "@/lib/settings";
 import { useSpeechInput } from "@/lib/useSpeechInput";
 import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
@@ -364,14 +365,41 @@ export default function QuestionScreen() {
   // นาฬิกากับกล่องคำใบ้เป็น state ในหน้านี้ ไม่ได้อยู่ใน reducer จึงต้องส่งแยก
   // ใช้ timer.deadlineAt ตรง ๆ เพราะเป็นเวลาปลายทางจริง ไม่เพี้ยนตามการหน่วง
   // ของแท็บ และเปลี่ยนแค่ตอนขึ้นข้อใหม่ จึงไม่ยิงเครือข่ายทุก tick
+  /**
+   * ภาพประกอบของข้อนี้ ย่อแล้ว เตรียมไว้ส่งข้ามเครื่อง
+   *
+   * ผู้ใช้รายงานว่าจอมือถือของเพื่อนไม่มีภาพโจทย์เลย ทั้งที่จอเจ้าภาพมี
+   * เพราะ stripHeavyFields ตัด imageUrl ออกจากสแนปช็อตเพื่อไม่ให้ก้อนใหญ่เกิน
+   * (คำถาม 20 ข้อ × ภาพละ ~800KB = 3-5MB ซึ่งส่งไม่ได้)
+   * ย่อเหลือราว 1 ใน 10 แล้วส่งทางสถานะสดแทน ซึ่งมีทีละข้อจึงมีภาพเดียวเสมอ
+   */
+  const [liveImage, setLiveImage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isHost || !question?.imageUrl) {
+      setLiveImage(null);
+      return;
+    }
+    let cancelled = false;
+    void shrinkImage(question.imageUrl).then((small) => {
+      if (!cancelled) setLiveImage(small);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isHost, question?.imageUrl]);
+
   useEffect(() => {
     if (!isHost) return;
     syncLive({
       questionId: question?.id ?? null,
+      imageUrl: liveImage,
       deadlineAt: timer.deadlineAt,
       boxes: (boxes ?? []).map((b) => ({
         id: b.id,
         label: b.label,
+        // ส่งโซนไปด้วยเสมอ ผู้ติดตามจะได้เห็นว่ากล่องไหนเป็นกล่องภาพ
+        // ส่วนเนื้อในยังปิดอยู่จนกว่าเจ้าภาพจะเปิด
+        zone: b.zone ?? null,
         text: openedIds.includes(b.id) ? b.text : null,
       })),
       activeParticipantId: active?.id ?? null,
@@ -381,6 +409,7 @@ export default function QuestionScreen() {
     isHost,
     syncLive,
     question?.id,
+    liveImage,
     timer.deadlineAt,
     boxes,
     openedIds,

@@ -1,4 +1,4 @@
-import type { GameState } from "./types";
+import type { GameState, HintZone } from "./types";
 
 /**
  * ห้องเล่นข้ามเครื่อง — ชนิดข้อมูลที่ใช้ร่วมกันทั้งฝั่ง client และ server
@@ -62,10 +62,20 @@ export interface RoomLiveBox {
   label: string;
   /** null = ยังไม่เปิดกล่องนี้ */
   text: string | null;
+  /** โซนของภาพที่กล่องนี้ชี้ไป — null = กล่องข้อความล้วน */
+  zone?: HintZone | null;
 }
 
 export interface RoomLive {
   questionId: string | null;
+  /**
+   * ภาพประกอบของข้อที่กำลังเล่น ย่อแล้ว
+   *
+   * ต้องส่งทาง live ไม่ใช่ทาง snapshot เพราะ snapshot มีคำถามทั้ง 20 ข้อ
+   * ถ้าแนบภาพต้นฉบับ (~800KB ต่อภาพ) ไปด้วยจะกลายเป็นก้อน 3-5MB
+   * ซึ่งเกินขนาดที่ Upstash รับไหว — ส่วน live มีทีละข้อ จึงมีภาพเดียวเสมอ
+   */
+  imageUrl?: string | null;
   /** epoch ms ที่หมดเวลา — ส่งเป็นเวลาปลายทางไม่ใช่วินาทีที่เหลือ จะได้ไม่เพี้ยนตามดีเลย์ */
   deadlineAt: number | null;
   boxes: RoomLiveBox[];

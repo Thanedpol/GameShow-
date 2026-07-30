@@ -5,6 +5,7 @@ import RoomPanel from "./RoomPanel";
 import TeammateNotes from "./TeammateNotes";
 import { useRoom } from "@/lib/roomClient";
 import { MAX_INTENT_LENGTH } from "@/lib/room";
+import { ZONE_POSITION } from "@/lib/types";
 import { STAGE_LABEL, rankParticipants } from "@/lib/scoring";
 
 /**
@@ -175,6 +176,16 @@ export default function FollowerScreen() {
           <p className="text-base font-semibold leading-relaxed text-white">
             {question.prompt}
           </p>
+          {/*
+            ภาพโจทย์มาทางสถานะสด ไม่ใช่ทางสแนปช็อต — ดู RoomLive.imageUrl ว่าทำไม
+            ถ้าไม่มีภาพก็ไม่แสดงอะไร ไม่ต้องเว้นที่ว่างไว้
+          */}
+          {liveMatchesQuestion && live?.imageUrl ? (
+            <div className="overflow-hidden rounded-xl border border-white/15">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={live.imageUrl} alt="ภาพประกอบโจทย์" className="w-full" />
+            </div>
+          ) : null}
           {question.choices?.length ? (
             <ul className="space-y-2">
               {question.choices.map((c) => (
@@ -194,23 +205,48 @@ export default function FollowerScreen() {
       {liveMatchesQuestion && (live?.boxes.length ?? 0) > 0 ? (
         <section className="space-y-2">
           <h2 className="text-xs font-bold text-slate-300">
-            กล่องคำใบ้ที่เปิดแล้ว ({openedBoxes.length}/{live?.boxes.length})
+            กล่องคำใบ้ ({openedBoxes.length}/{live?.boxes.length} เปิดแล้ว)
           </h2>
-          {openedBoxes.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-sky-400/30 bg-white/[0.02] px-4 py-5 text-center text-xs text-slate-400">
-              ยังไม่มีใครเปิดกล่อง — คุยกับเพื่อนก่อนว่าจะเปิดดีไหม
-            </p>
-          ) : (
-            openedBoxes.map((b) => (
+          {/*
+            วาดครบทุกกล่องเหมือนจอเจ้าภาพ ไม่ใช่โชว์เฉพาะกล่องที่เปิดแล้ว
+            ผู้ใช้รายงานว่าจอมือถือของเพื่อน "ไม่มีขึ้นสักกล่อง" เพราะของเดิม
+            ขึ้นข้อความว่ายังไม่มีใครเปิดแทนที่จะขึ้นกล่อง ทำให้สองจอดูไม่เหมือนกัน
+            กล่องที่ยังไม่เปิดแสดงเป็นช่องทึบ เพื่อนจึงเห็นว่ามีกี่กล่องและเหลือกี่ใบ
+          */}
+          <div className="grid grid-cols-2 gap-2">
+            {(live?.boxes ?? []).map((b) => (
               <div
                 key={b.id}
-                className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-4 py-3"
+                className={`rounded-xl border px-3 py-2.5 ${
+                  b.text !== null
+                    ? "border-sky-400/40 bg-sky-500/10"
+                    : "border-dashed border-stage-edge bg-white/[0.02]"
+                }`}
               >
-                <p className="text-xs font-bold text-sky-300">กล่อง {b.label}</p>
-                <p className="mt-1 text-sm leading-relaxed text-slate-100">{b.text}</p>
+                <p className="text-xs font-bold text-sky-300">
+                  {b.text !== null ? "" : "🎁 "}กล่อง {b.label}
+                </p>
+                {b.text !== null ? (
+                  <>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-100">{b.text}</p>
+                    {b.zone && live?.imageUrl ? (
+                      <div className="mt-2 h-20 w-full overflow-hidden rounded-lg border border-white/15">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={live.imageUrl}
+                          alt={`ซูมภาพโซน${b.zone}`}
+                          style={{ objectPosition: ZONE_POSITION[b.zone] }}
+                          className="h-full w-full scale-[2.2] object-cover"
+                        />
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">ยังไม่เปิด</p>
+                )}
               </div>
-            ))
-          )}
+            ))}
+          </div>
           <p className="text-xs text-slate-500">
             ⚠️ ในกล่องมีทั้งใบ้จริงและใบ้หลอก ยังไม่เฉลยจนกว่าจะจบข้อ
           </p>

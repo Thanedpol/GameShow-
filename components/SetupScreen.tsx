@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import RoomPanel from "./RoomPanel";
 import { useRoom } from "@/lib/roomClient";
 import { useGame } from "@/lib/gameStore";
@@ -21,6 +21,22 @@ export default function SetupScreen() {
   const { dispatch } = useGame();
   const { isHost, session } = useRoom();
   const [mode, setMode] = useState<MatchMode>("bot");
+  /**
+   * เปิดห้องแล้ว = ตั้งใจเล่นกับคนจริง ไม่ใช่ซ้อมกับบอท
+   *
+   * ค่าตั้งต้นเป็น "ดวลกับบอท" ซึ่งเหมาะกับคนที่เปิดเว็บมาเล่นคนเดียว
+   * แต่พอมีห้องแล้วมันกลายเป็นกับดัก — ผู้ใช้เปิดห้อง ชวนเพื่อนเข้ามา
+   * แล้วกดเริ่มเกม จู่ ๆ ก็มีบอทโผล่มาแข่งด้วยทั้งที่ไม่ได้อยากแข่งกับบอท
+   * (รายงานมาตรง ๆ ว่า "สร้างห้องแล้ว ทำไมถึงมีบอท ตัดบอทออก")
+   *
+   * สลับให้เองครั้งเดียวตอนเพิ่งเปิดห้อง ถ้าผู้ใช้เลือกโหมดเองแล้วไม่ยุ่งอีก
+   */
+  const switchedForRoom = useRef(false);
+  useEffect(() => {
+    if (!isHost || switchedForRoom.current) return;
+    switchedForRoom.current = true;
+    setMode((prev) => (prev === "bot" ? "solo" : prev));
+  }, [isHost]);
   const [botLevel, setBotLevel] = useState<BotLevel>("ปกติ");
   const [count, setCount] = useState(2);
   const [names, setNames] = useState<string[]>(["", "", "", ""]);
