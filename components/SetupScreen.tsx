@@ -86,17 +86,34 @@ export default function SetupScreen() {
    */
   const needsRoom = mode === "team" && !isHost;
 
-  const ready = useMemo(() => {
+  /**
+   * บอกให้ชัดว่า "ยังขาดช่องไหน" ไม่ใช่แค่ "กรอกชื่อให้ครบ"
+   *
+   * โหมดทีม 2 ทีมมีช่องให้กรอก 6 ช่อง (ชื่อทีม + สมาชิกสองคน คูณสองทีม)
+   * ข้อความเดิมบอกแค่ว่ายังไม่ครบ ผู้ใช้ต้องไล่หาเองว่าเว้นช่องไหนไว้
+   * ซึ่งบนมือถือที่ต้องเลื่อนจอ ทำให้ดูเหมือนปุ่มเริ่มเกม "หายไป" ทั้งที่แค่กดไม่ได้
+   */
+  const missing = useMemo(() => {
+    const gaps: string[] = [];
     if (mode === "team") {
-      if (!isHost) return false;
-      return Array.from({ length: slots }).every(
-        (_, i) =>
-          teamNames[i].trim().length > 0 &&
-          members[i].every((m) => m.trim().length > 0),
-      );
+      for (let i = 0; i < slots; i += 1) {
+        if (!teamNames[i].trim()) gaps.push(`ชื่อทีมที่ ${i + 1}`);
+        members[i].forEach((m, j) => {
+          if (!m.trim()) gaps.push(`สมาชิกทีม ${i + 1} คนที่ ${j + 1}`);
+        });
+      }
+    } else {
+      for (let i = 0; i < slots; i += 1) {
+        if (!names[i].trim()) gaps.push(slots > 1 ? `ชื่อผู้เล่นคนที่ ${i + 1}` : "ชื่อของคุณ");
+      }
     }
-    return Array.from({ length: slots }).every((_, i) => names[i].trim().length > 0);
-  }, [mode, slots, names, teamNames, members, isHost]);
+    return gaps;
+  }, [mode, slots, names, teamNames, members]);
+
+  const ready = useMemo(
+    () => missing.length === 0 && !(mode === "team" && !isHost),
+    [missing, mode, isHost],
+  );
 
   async function handleStart() {
     if (!ready || starting) return;
@@ -333,10 +350,10 @@ export default function SetupScreen() {
           {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
         </button>
         {!ready ? (
-          <p className="text-center text-xs text-slate-500">
+          <p className="text-center text-xs text-amber-200/90">
             {needsRoom
               ? "โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่ เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้"
-              : "กรอกชื่อให้ครบก่อนเริ่ม"}
+              : `ปุ่มยังกดไม่ได้เพราะยังไม่ได้กรอก: ${missing.join(" · ")}`}
           </p>
         ) : null}
       </section>
