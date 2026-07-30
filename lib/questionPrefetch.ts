@@ -89,41 +89,73 @@ function orderByStage(questions: Question[]): Question[] {
   return STAGES.flatMap((stage) => questions.filter((q) => q.stage === stage));
 }
 
-async function requestLive(settings: GameSettings): Promise<PreparedSet> {
-  const stages = STAGES.filter((s) => settings.counts[s] > 0).map((stage) => ({
-    stage,
-    count: settings.counts[stage],
-    pointValue: settings.points[stage],
-  }));
-
+/**
+ * ยิงแยกคำขอ "หนึ่งช่วงต่อหนึ่ง request" ขนานกัน
+ *
+ * เดิมส่งทั้งสามช่วงไปใน request เดียว ซึ่งแปลว่าทั้งเกมต้องเสร็จภายใน
+ * `maxDuration = 60` วินาทีของ Vercel ก้อนเดียว วัดจริงหลังบังคับให้เฉลย
+ * กางการคำนวณแล้วได้ 56.8 วิ — เหลือขอบเพียง 3 วินาที ซึ่งบนเซิร์ฟเวอร์จริง
+ * ที่ช้ากว่าเครื่องเราจะทะลุแน่นอน แล้วผู้เล่นจะได้คำถามจากคลังสำรองทั้งเกม
+ *
+ * แยกเป็นสาม request แล้วแต่ละอันได้เวลา 60 วินาทีของตัวเอง ช่วงที่หนักสุด
+ * ใช้ราว 43 วิ จึงมีขอบเหลือจริง และถ้าช่วงไหนล้ม ช่วงที่เหลือยังได้ของครบ
+ * ไม่ใช่ล้มทั้งเกมเหมือนเดิม
+ */
+async function requestStage(
+  settings: GameSettings,
+  stage: (typeof STAGES)[number],
+  avoid: string[],
+  imageCount: number,
+): Promise<QuestionsApiShape> {
   const res = await fetch("/api/questions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      stages,
+      stages: [{ stage, count: settings.counts[stage], pointValue: settings.points[stage] }],
       groups: settings.feedGroups,
-      avoid: recentTopics(40),
-      imageCount: settings.imageCount,
+      avoid,
+      imageCount,
       llm: llmRequestPayload("questions"),
     }),
   });
   if (!res.ok) throw new Error(String(res.status));
+  return (await res.json()) as QuestionsApiShape;
+}
 
-  const data = (await res.json()) as QuestionsApiShape;
+async function requestLive(settings: GameSettings): Promise<PreparedSet> {
+  const stages = STAGES.filter((s) => settings.counts[s] > 0);
+  const avoid = recentTopics(40);
+
+  // กระจายโควตาภาพให้ทุกช่วง ไม่ให้กองอยู่ช่วงเดียวเหมือนตอนส่งรวมก้อนเดียว
+  const perStage = Math.floor(settings.imageCount / Math.max(stages.length, 1));
+  const extra = settings.imageCount - perStage * stages.length;
+
+  const results = await Promise.allSettled(
+    stages.map((stage, i) =>
+      requestStage(settings, stage, avoid, perStage + (i < extra ? 1 : 0)),
+    ),
+  );
+
+  const data = results
+    .filter((r): r is PromiseFulfilledResult<QuestionsApiShape> => r.status === "fulfilled")
+    .map((r) => r.value);
+
   // ข้อที่สร้างมาผ่านตัวตรวจฝั่งเซิร์ฟเวอร์แล้ว แต่ยังต้องกันคำถามที่เครื่องนี้เคยเจอ
   // เทียบด้วยลายนิ้วมือของตัวคำถาม ไม่ใช่ id — โมเดลเขียนประโยคเดียวกันด้วยคำต่างกันนิดหน่อยได้
   const seenFp = seenFingerprints();
-  const live = (data.questions ?? []).filter(
-    (q): q is Question =>
-      Boolean(q) &&
-      typeof (q as Question).prompt === "string" &&
-      !seenFp.has(fingerprint((q as Question).prompt)),
-  );
+  const live = data
+    .flatMap((d) => d.questions ?? [])
+    .filter(
+      (q): q is Question =>
+        Boolean(q) &&
+        typeof (q as Question).prompt === "string" &&
+        !seenFp.has(fingerprint((q as Question).prompt)),
+    );
 
   return {
     questions: live,
     liveCount: live.length,
-    sourcesUsed: data.sourcesUsed ?? [],
+    sourcesUsed: [...new Set(data.flatMap((d) => d.sourcesUsed ?? []))],
   };
 }
 
