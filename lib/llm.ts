@@ -214,16 +214,69 @@ export function envChoice(): LlmChoice {
  * ถ้า client ระบุ provider มาแต่ไม่ระบุโมเดล จะไม่หยิบ HINT_MODEL ของ env มาใช้
  * เพราะโมเดลของคนละเจ้าใช้ชื่อคนละแบบ (claude-opus-5 กับ llama3.1 สลับกันไม่ได้)
  */
+/**
+ * โมเดลที่ยอมให้เรียก "ด้วยคีย์ของเซิร์ฟเวอร์"
+ *
+ * ⚠️ กันเงินรั่ว — ของเดิม sanitizeModel() ตรวจแค่รูปแบบตัวอักษร ใครก็ระบุชื่อ
+ * โมเดลรุ่นแพงที่สุดของค่ายนั้นมาใน request ได้ แล้วเซิร์ฟเวอร์ก็เรียกให้
+ * โดยจ่ายด้วยคีย์ของเจ้าของเว็บ ต่างกันหลายสิบเท่าต่อคำขอหนึ่งครั้ง
+ *
+ * ตั้งเองได้ด้วย ALLOWED_MODELS (คั่นด้วยคอมมา) ถ้าไม่ตั้งจะใช้ค่าดีฟอลต์ของ
+ * แต่ละค่าย บวกกับโมเดลที่เจ้าของตั้งไว้ใน env อยู่แล้ว — เจ้าของจึงเปลี่ยน
+ * โมเดลที่ใช้จริงได้เหมือนเดิมโดยไม่ต้องมาแก้ลิสต์นี้
+ */
+export function serverAllowedModels(): Set<string> {
+  const listed = readEnvLoose("ALLOWED_MODELS");
+  if (listed) {
+    const picked = listed
+      .split(",")
+      .map((s) => sanitizeModel(s))
+      .filter((s): s is string => Boolean(s));
+    if (picked.length > 0) return new Set(picked);
+  }
+
+  const out = new Set<string>(Object.values(DEFAULT_MODEL));
+  for (const m of FALLBACK_MODELS.anthropic) out.add(m);
+  // โมเดลที่เจ้าของเลือกไว้เองต้องใช้ได้เสมอ ไม่งั้นตั้ง env แล้วระบบเมิน
+  const envModel = sanitizeModel(readEnvLoose("HINT_MODEL"));
+  if (envModel) out.add(replaceRetiredModel(envModel));
+  return out;
+}
+
+/** เตือนครั้งเดียวต่อชื่อโมเดล ไม่ให้ log ท่วมตอนโดนยิงรัว ๆ */
+const warnedModels = new Set<string>();
+
 export function resolveLlm(input?: LlmChoiceInput | null): LlmChoice {
   const fromEnv = envChoice();
   if (!input) return fromEnv;
 
   const provider = isProvider(input.provider) ? input.provider : fromEnv.provider;
   const apiKey = sanitizeApiKey(input.apiKey) ?? undefined;
-  const model = sanitizeModel(input.model);
+  const requested = sanitizeModel(input.model);
   // แทนที่โมเดลที่ถูกปลดระวางด้วย ไม่ใช่แค่ตอนอ่านจาก env
   // เพราะค่าที่เลือกไว้ในหลังบ้านก็ค้างอยู่ใน localStorage ได้เหมือนกัน
-  if (model) return { provider, model: replaceRetiredModel(model), apiKey };
+  const model = requested ? replaceRetiredModel(requested) : null;
+
+  if (model) {
+    /**
+     * แนบคีย์มาเอง = คนเรียกเป็นคนจ่าย จะเลือกโมเดลอะไรก็เรื่องของเขา
+     * ไม่แนบมา = จะไปใช้คีย์ของเซิร์ฟเวอร์ ต้องอยู่ในลิสต์ที่เจ้าของอนุญาต
+     *
+     * ไม่ผ่านลิสต์ก็ไม่ error — ถอยไปใช้โมเดลที่เซิร์ฟเวอร์ตั้งไว้แทน
+     * เพราะการทำให้เกมเล่นไม่ได้เพราะเลือกโมเดลผิดนั้นแย่กว่าการเงียบ ๆ
+     * ใช้ตัวมาตรฐาน และ log ไว้ให้เจ้าของเห็นว่าต้องเพิ่มชื่อไหนเข้าลิสต์
+     */
+    if (apiKey || serverAllowedModels().has(model)) {
+      return { provider, model, apiKey };
+    }
+    if (!warnedModels.has(model)) {
+      warnedModels.add(model);
+      console.warn(
+        `[llm] ไม่อนุญาตให้ใช้โมเดล "${model}" กับคีย์ของเซิร์ฟเวอร์ — ` +
+          `ใช้ ${fromEnv.model} แทน · ถ้าตั้งใจให้ใช้ได้ ให้เพิ่มชื่อนี้ใน ALLOWED_MODELS`,
+      );
+    }
+  }
 
   return {
     provider,

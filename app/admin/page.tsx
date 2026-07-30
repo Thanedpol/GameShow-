@@ -41,6 +41,7 @@ import {
 import type { AdminConfigResponse } from "@/app/api/admin/config/route";
 import type { AdminModelsResponse } from "@/app/api/admin/models/route";
 import type { Category, Difficulty, Question, QuestionFormat, Stage } from "@/lib/types";
+import { apiHeaders } from "@/lib/apiHeaders";
 
 type Tab = "questions" | "rules" | "api";
 
@@ -592,7 +593,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
     try {
       const res = await fetch("/api/questions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(),
         body: JSON.stringify({
           stages: [{ stage: "warmup", count: 3, pointValue: s.points.warmup }],
           groups: s.feedGroups,
@@ -1057,8 +1058,9 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
     null,
   );
 
+  // ต้องมีทั้งกุญแจร่วมของแอป (ด่าน rate limit) และรหัสหลังบ้าน — คนละด่านกัน
   const headers = useMemo(
-    () => ({ "Content-Type": "application/json", "x-admin-password": password }),
+    () => ({ ...apiHeaders(), "x-admin-password": password }),
     [password],
   );
 
@@ -1702,8 +1704,21 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                 </Row>
               ) : null}
               <Row label="REVEAL_SECRET">
-                <span className="text-slate-300">
-                  {cfg.hasRevealSecret ? "ตั้งค่าแล้ว" : "ไม่ได้ตั้ง (derive จาก API key)"}
+                <span className={cfg.hasRevealSecret ? "text-slate-300" : "text-amber-200"}>
+                  {cfg.hasRevealSecret ? "ตั้งค่าแล้ว" : "⚠️ ไม่ได้ตั้ง (derive จาก API key)"}
+                </span>
+              </Row>
+              {/* ด่านกันคนนอกยิง API ตรง — ดู lib/apiGuard.ts */}
+              <Row label="APP_ACCESS_TOKEN">
+                <span className={cfg.hasAccessToken ? "text-teal-200" : "text-amber-200"}>
+                  {cfg.hasAccessToken
+                    ? "เปิดใช้อยู่"
+                    : "⚠️ ไม่ได้ตั้ง — ใครยิง API ตรงก็ผ่าน"}
+                </span>
+              </Row>
+              <Row label="โมเดลที่ใช้คีย์เซิร์ฟเวอร์ได้">
+                <span className="font-mono text-slate-300">
+                  {cfg.allowedModels.join(" · ")}
                 </span>
               </Row>
             </dl>

@@ -133,6 +133,15 @@ export const HINT_ZONES = [
 
 export type HintZone = (typeof HINT_ZONES)[number];
 
+/**
+ * ความยาวสูงสุดของคำตอบที่ผู้เล่นพิมพ์
+ *
+ * เดิมเลข 1200 นี้ถูกเขียนซ้ำอยู่สามที่ (maxLength ของ textarea, ตอนต่อข้อความ
+ * จากไมค์ และตัวนับใต้ช่อง) พอเซิร์ฟเวอร์ต้องใช้ค่าเดียวกันมาตรวจด้วย
+ * การปล่อยให้กระจายแบบนั้นแปลว่าวันหนึ่งจะมีที่ใดที่หนึ่งหลุดไม่ตรงกัน
+ */
+export const MAX_ANSWER_LENGTH = 1200;
+
 /** ตำแหน่ง object-position (%) ของแต่ละโซน ใช้ซูมภาพให้ตรงจุด */
 export const ZONE_POSITION: Record<HintZone, string> = {
   บนซ้าย: "0% 0%",

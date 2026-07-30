@@ -6,6 +6,7 @@ import {
   type LlmProvider,
   type ModelOption,
 } from "@/lib/llm";
+import { GUARD_RULES, guardApi } from "@/lib/apiGuard";
 
 
 export const runtime = "nodejs";
@@ -37,6 +38,11 @@ function authorized(request: NextRequest): boolean {
 }
 
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.admin);
+  if (blocked) return blocked;
+
   if (!authorized(request)) {
     return NextResponse.json({ error: "รหัสผ่านหลังบ้านไม่ถูกต้อง" }, { status: 401 });
   }

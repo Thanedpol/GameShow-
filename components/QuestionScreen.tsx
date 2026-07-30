@@ -27,6 +27,7 @@ import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
 import type { VoiceCritique } from "@/lib/voiceCoach";
 import type { CritiqueApiResponse } from "@/app/api/critique/route";
 import type { TranscribeApiResponse } from "@/app/api/transcribe/route";
+import { MAX_ANSWER_LENGTH } from "@/lib/types";
 import type {
   GradeApiResponse,
   HintApiResponse,
@@ -35,6 +36,7 @@ import type {
   RevealApiResponse,
   RevealedHintBox,
 } from "@/lib/types";
+import { apiHeaders } from "@/lib/apiHeaders";
 
 /**
  * ช่วงของหนึ่งข้อ — ขึ้นข้อมาก็ตอบได้เลย ไม่มีจอคั่นให้กดอะไรก่อน
@@ -582,7 +584,7 @@ export default function QuestionScreen() {
         try {
           const res = await fetch("/api/critique", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: apiHeaders(),
             body: JSON.stringify({
               audio: clip.base64,
               mimeType: clip.mimeType,
@@ -608,7 +610,7 @@ export default function QuestionScreen() {
       try {
         const res = await fetch("/api/transcribe", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: apiHeaders(),
           body: JSON.stringify({
             audio: clip.base64,
             mimeType: clip.mimeType,
@@ -668,7 +670,7 @@ export default function QuestionScreen() {
         try {
           const res = await fetch("/api/grade", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: apiHeaders(),
             body: JSON.stringify({
               questionId: question.id,
               question,
@@ -707,7 +709,7 @@ export default function QuestionScreen() {
     setInterim("");
     setText((prev) => {
       const joined = prev.trim() ? `${prev.trim()} ${spoken.trim()}` : spoken.trim();
-      return joined.slice(0, 1200);
+      return joined.slice(0, MAX_ANSWER_LENGTH);
     });
   }, []);
 
@@ -818,7 +820,7 @@ export default function QuestionScreen() {
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={5}
-            maxLength={1200}
+            maxLength={MAX_ANSWER_LENGTH}
             placeholder="พิมพ์คำตอบของคุณ... (หรือกดปุ่มไมค์แล้วพูด)"
             className="field min-h-[130px] resize-y leading-relaxed"
           />
@@ -867,11 +869,13 @@ export default function QuestionScreen() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 rows={5}
-                maxLength={1200}
+                maxLength={MAX_ANSWER_LENGTH}
                 placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป..."
                 className="field min-h-[130px] resize-y leading-relaxed"
               />
-              <span className="text-xs text-slate-500">{text.length}/1200</span>
+              <span className="text-xs text-slate-500">
+                {text.length}/{MAX_ANSWER_LENGTH}
+              </span>
             </>
           ) : null}
 
@@ -1080,7 +1084,7 @@ export default function QuestionScreen() {
         counter={
           (phase === "answering" && question.format === "open") ||
           (phase === "performing" && !micWorks)
-            ? `${text.length}/1200`
+            ? `${text.length}/${MAX_ANSWER_LENGTH}`
             : ""
         }
       >

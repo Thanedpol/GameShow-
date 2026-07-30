@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { generateQuestions, type StageRequest } from "@/lib/questionGen";
 import { FEED_GROUPS, type FeedGroup } from "@/lib/sources";
 import type { LlmChoiceInput, Question, Stage } from "@/lib/types";
+import { GUARD_RULES, guardApi } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,6 +81,11 @@ function parseGroups(input: RequestBody["groups"]): FeedGroup[] {
 }
 
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.questions);
+  if (blocked) return blocked;
+
   let body: RequestBody;
   try {
     body = (await request.json()) as RequestBody;

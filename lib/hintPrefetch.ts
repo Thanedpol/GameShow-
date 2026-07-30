@@ -1,5 +1,6 @@
 import { llmRequestPayload } from "./settings";
 import type { HintApiResponse, Question } from "./types";
+import { apiHeaders } from "./apiHeaders";
 
 /**
  * เตรียมกล่องคำใบ้ล่วงหน้า
@@ -32,7 +33,7 @@ async function fetchHints(question: Question): Promise<HintApiResponse | null> {
   try {
     const res = await fetch("/api/hint", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders(),
       // ส่งตัวข้อไปด้วย เผื่อเป็นคำถามที่แก้/เพิ่มจากหลังบ้าน
       // ซึ่งเซิร์ฟเวอร์ไม่มีอยู่ในคลังตั้งต้น
       body: JSON.stringify({

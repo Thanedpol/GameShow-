@@ -3,6 +3,7 @@ import { getQuestionById } from "@/lib/questions";
 import { openReveal } from "@/lib/hintEngine";
 import { callLlmJson, isChoiceReady, resolveLlm } from "@/lib/llm";
 import type { DebriefApiRequest, DebriefApiResponse } from "@/lib/types";
+import { GUARD_RULES, guardApi } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,6 +76,11 @@ function fallbackOverall(body: DebriefApiRequest): string {
 }
 
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.debrief);
+  if (blocked) return blocked;
+
   let body: DebriefApiRequest;
   try {
     body = (await request.json()) as DebriefApiRequest;

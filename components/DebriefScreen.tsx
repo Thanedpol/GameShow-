@@ -5,6 +5,7 @@ import { useGame } from "@/lib/gameStore";
 import { MODE_LABEL, STAGE_LABEL, nameOfId, rankParticipants, winnersOf } from "@/lib/scoring";
 import { llmRequestPayload } from "@/lib/settings";
 import type { DebriefApiResponse } from "@/lib/types";
+import { apiHeaders } from "@/lib/apiHeaders";
 
 const FORMAT_LABEL = {
   choice: "ปรนัย",
@@ -25,7 +26,7 @@ export default function DebriefScreen() {
       try {
         const res = await fetch("/api/debrief", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: apiHeaders(),
           body: JSON.stringify({
             participants: state.participants.map((p) => ({ name: p.name, score: p.score })),
             hintHistory: state.hintHistory,

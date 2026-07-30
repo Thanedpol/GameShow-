@@ -12,10 +12,12 @@ import {
   providerKey,
   resolveLlm,
   sanitizeModel,
+  serverAllowedModels,
   testLlm,
   type LlmChoiceInput,
   type LlmProvider,
 } from "@/lib/llm";
+import { GUARD_RULES, accessTokenRequired, guardApi } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,6 +133,10 @@ export interface AdminConfigResponse {
   passwordRequired: boolean;
   environment: string;
   hasRevealSecret: boolean;
+  /** ตั้ง APP_ACCESS_TOKEN ไว้หรือยัง — ด่านกันคนยิง API ตรง */
+  hasAccessToken: boolean;
+  /** โมเดลที่เรียกด้วยคีย์ของเซิร์ฟเวอร์ได้ */
+  allowedModels: string[];
   locked?: boolean;
 }
 
@@ -159,6 +165,11 @@ function buildStatus(): ProviderStatus[] {
 }
 
 export async function GET(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.admin);
+  if (blocked) return blocked;
+
   const fromEnv = envChoice();
   const envNames = inspectEnvNames();
   const payload: AdminConfigResponse = {
@@ -179,6 +190,8 @@ export async function GET(request: NextRequest) {
     passwordRequired: Boolean(process.env.ADMIN_PASSWORD?.trim()),
     environment: IS_PROD ? "production" : "development",
     hasRevealSecret: Boolean(process.env.REVEAL_SECRET?.trim()),
+    hasAccessToken: accessTokenRequired(),
+    allowedModels: [...serverAllowedModels()].sort(),
   };
 
   if (payload.passwordRequired && !authorized(request)) {
@@ -231,6 +244,11 @@ const KEY_FORMAT: Partial<Record<LlmProvider, { pattern: RegExp; hint: string }>
 };
 
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.admin);
+  if (blocked) return blocked;
+
   if (!authorized(request)) {
     return NextResponse.json({ error: "รหัสผ่านหลังบ้านไม่ถูกต้อง" }, { status: 401 });
   }

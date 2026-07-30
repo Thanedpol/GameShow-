@@ -11,6 +11,7 @@ import {
   type GameSettings,
 } from "./settings";
 import type { Question, Stage } from "./types";
+import { apiHeaders } from "./apiHeaders";
 
 /**
  * เตรียมชุดคำถามไว้ล่วงหน้าตั้งแต่ผู้เล่นยังอยู่หน้าตั้งค่า
@@ -110,7 +111,7 @@ async function requestStage(
 ): Promise<QuestionsApiShape> {
   const res = await fetch("/api/questions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body: JSON.stringify({
       stages: [{ stage, count: settings.counts[stage], pointValue: settings.points[stage] }],
       groups: settings.feedGroups,
@@ -176,7 +177,7 @@ async function attachImages(questions: Question[]): Promise<Question[]> {
   try {
     const res = await fetch("/api/questions/images", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders(),
       body: JSON.stringify({ jobs, llm: llmRequestPayload("image") }),
     });
     if (!res.ok) return questions;

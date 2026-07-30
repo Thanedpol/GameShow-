@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { transcribeAudio } from "@/lib/transcribe";
 import type { LlmChoiceInput } from "@/lib/types";
+import { GUARD_RULES, guardApi } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,11 @@ export interface TranscribeApiResponse {
 }
 
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.voice);
+  if (blocked) return blocked;
+
   let body: RequestBody;
   try {
     body = (await request.json()) as RequestBody;

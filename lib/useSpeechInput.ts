@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { llmRequestPayload } from "./settings";
+import { apiHeaders } from "./apiHeaders";
 
 /**
  * ปุ่มไมค์สำหรับ "พูดแทนพิมพ์" ตอนตอบคำถาม
@@ -224,7 +225,7 @@ export function useSpeechInput({ onText, lang = "th-TH" }: SpeechInputOptions) {
     try {
       const res = await fetch("/api/transcribe", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(),
         body: JSON.stringify({
           audio: await blobToBase64(blob),
           mimeType: blob.type || "audio/webm",

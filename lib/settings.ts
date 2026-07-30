@@ -413,6 +413,23 @@ export function llmRequestPayload(
 const VALID_STAGES: Stage[] = ["warmup", "push", "final"];
 
 /** คัดเฉพาะฟิลด์ที่รู้จัก และทิ้งข้อที่ข้อมูลไม่ครบ */
+/**
+ * เพดานความยาวของแต่ละช่องในคำถาม
+ *
+ * ⚠️ ไม่ใช่แค่กันข้อมูลเพี้ยน แต่กันเงินรั่วด้วย — คำถามที่ส่งมากับ request
+ * ถูกยัดเข้าไปในพรอมป์ตของ /api/hint (4 ครั้งต่อข้อ) และ /api/grade
+ * ของเดิมตัดความยาวแค่ sourceName กับ imagePrompt ที่เหลือปล่อยผ่านหมด
+ * แปลว่าใครส่ง prompt ขนาดครึ่งเมกะไบต์เข้ามา ก็กลายเป็น input มหาศาลคูณสี่
+ * โดยจ่ายด้วยคีย์ของเจ้าของเว็บ
+ *
+ * ค่าที่ตั้งเผื่อไว้กว้างกว่าของจริงหลายเท่า — โจทย์ที่ยาวที่สุดในคลังราว 200
+ * ตัวอักษร และเฉลยที่ยาวสุดราว 600 จึงไม่มีทางไปตัดของที่ใช้งานจริง
+ */
+const MAX_PROMPT_CHARS = 2_000;
+const MAX_RUBRIC_CHARS = 3_000;
+const MAX_LINE_CHARS = 600;
+const MAX_LIST_ITEMS = 12;
+
 export function sanitizeQuestion(input: unknown): Question | null {
   if (!input || typeof input !== "object") return null;
   const q = input as Record<string, unknown>;
@@ -426,18 +443,25 @@ export function sanitizeQuestion(input: unknown): Question | null {
   const stage = VALID_STAGES.includes(q.stage as Stage) ? (q.stage as Stage) : "warmup";
 
   const choices = Array.isArray(q.choices)
-    ? q.choices.filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+    ? q.choices
+        .filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+        .slice(0, MAX_LIST_ITEMS)
+        .map((c) => c.slice(0, MAX_LINE_CHARS))
     : [];
+
+  // ตัดก่อนเทียบ ไม่ใช่หลังเทียบ — ไม่งั้นตัวเลือกที่ถูกตัดจะไม่ตรงกับคำตอบที่ยังเต็ม
+  const correctAnswer =
+    typeof q.correctAnswer === "string" ? q.correctAnswer.slice(0, MAX_LINE_CHARS) : null;
 
   // ปรนัยต้องมีตัวเลือกและคำตอบที่อยู่ในตัวเลือกจริง ไม่งั้นข้อนั้นเล่นไม่ได้
   if (format === "choice") {
     if (choices.length < 2) return null;
-    if (typeof q.correctAnswer !== "string" || !choices.includes(q.correctAnswer)) return null;
+    if (!correctAnswer || !choices.includes(correctAnswer)) return null;
   }
 
   return {
-    id: q.id.trim(),
-    prompt: q.prompt.trim(),
+    id: q.id.trim().slice(0, 120),
+    prompt: q.prompt.trim().slice(0, MAX_PROMPT_CHARS),
     format,
     stage,
     category: (typeof q.category === "string" ? q.category : "ชีวิตจริง") as Question["category"],
@@ -446,13 +470,13 @@ export function sanitizeQuestion(input: unknown): Question | null {
       : "กลาง") as Question["difficulty"],
     pointValue: clampNumber(q.pointValue, 0, 100000, DEFAULT_SETTINGS.points[stage]),
     choices: format === "choice" ? choices : undefined,
-    correctAnswer: format === "choice" ? (q.correctAnswer as string) : undefined,
-    rubric: typeof q.rubric === "string" ? q.rubric : undefined,
-    keyPoints: Array.isArray(q.keyPoints)
-      ? q.keyPoints.filter((k): k is string => typeof k === "string")
-      : undefined,
-    task: typeof q.task === "string" ? q.task : undefined,
-    explanation: typeof q.explanation === "string" ? q.explanation : undefined,
+    correctAnswer: format === "choice" ? (correctAnswer ?? undefined) : undefined,
+    rubric: typeof q.rubric === "string" ? q.rubric.slice(0, MAX_RUBRIC_CHARS) : undefined,
+    // คืน undefined เมื่อไม่มี ไม่ใช่อาร์เรย์ว่าง — คงพฤติกรรมเดิมไว้
+    keyPoints: asLines(q.keyPoints).length > 0 ? asLines(q.keyPoints) : undefined,
+    task: typeof q.task === "string" ? q.task.slice(0, MAX_RUBRIC_CHARS) : undefined,
+    explanation:
+      typeof q.explanation === "string" ? q.explanation.slice(0, MAX_RUBRIC_CHARS) : undefined,
     hints: sanitizeHints(q.hints),
     sourceName: typeof q.sourceName === "string" ? q.sourceName.slice(0, 120) : undefined,
     sourceUrl: safeHref(q.sourceUrl),
@@ -490,7 +514,10 @@ function safeImageSrc(value: unknown): string | undefined {
 
 const asLines = (v: unknown): string[] =>
   Array.isArray(v)
-    ? v.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    ? v
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .slice(0, MAX_LIST_ITEMS)
+        .map((s) => s.slice(0, MAX_LINE_CHARS))
     : [];
 
 function sanitizeHints(input: unknown): Question["hints"] {

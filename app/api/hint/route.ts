@@ -3,6 +3,7 @@ import { getQuestionById } from "@/lib/questions";
 import { generateHintBoxes, sealReveal } from "@/lib/hintEngine";
 import { sanitizeQuestion } from "@/lib/settings";
 import type { HintApiRequest, HintApiResponse } from "@/lib/types";
+import { GUARD_RULES, guardApi } from "@/lib/apiGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,11 @@ export const maxDuration = 60;
  * โดยไม่กินเวลาจากนาฬิกา 60 วินาที
  */
 export async function POST(request: NextRequest) {
+  // ด่านกันเงินรั่ว — ต้องเป็นบรรทัดแรกของ handler ก่อนจะอ่าน body ด้วยซ้ำ
+  // ไม่งั้นคนยิงถล่มจะได้ parse ก้อน 8MB ฟรีทุกคำขอ
+  const blocked = await guardApi(request, GUARD_RULES.hint);
+  if (blocked) return blocked;
+
   let body: Partial<HintApiRequest>;
   try {
     body = (await request.json()) as Partial<HintApiRequest>;
