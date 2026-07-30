@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { QUESTION_BANK } from "@/lib/questions";
 import { clearSeen, recentTopics, seenCount } from "@/lib/history";
@@ -1734,7 +1734,81 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           ) : null}
         </div>
       </details>
+
+      {/* ══ ที่เก็บห้องข้ามเครื่อง ══════════════════════════════════════════ */}
+      <RoomStorageCard />
     </div>
+  );
+}
+
+/**
+ * สถานะที่เก็บห้องเล่นข้ามเครื่อง
+ *
+ * ต้องมีที่นี่ ไม่ใช่แค่ในกล่องเตือนหน้าเกม เพราะกล่องนั้นโผล่เฉพาะตอนยัง
+ * ใช้หน่วยความจำอยู่ พอต่อ Redis สำเร็จมันจะหายไปทั้งกล่องพร้อมปุ่มทดสอบ
+ * — กลายเป็นว่าจังหวะที่อยากยืนยันที่สุดว่าต่อติดจริงไหม กลับไม่มีอะไรให้กด
+ */
+function RoomStorageCard() {
+  const [state, setState] = useState<{ backend: string; ok: boolean; detail: string } | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+
+  const check = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/room/health", { cache: "no-store" });
+      setState((await res.json()) as { backend: string; ok: boolean; detail: string });
+    } catch (e) {
+      setState({
+        backend: "unknown",
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  const good = state?.ok === true;
+
+  return (
+    <section className="panel space-y-2 p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-bold text-white">ที่เก็บห้องเล่นข้ามเครื่อง</h3>
+        <button onClick={() => void check()} disabled={busy} className="btn-ghost text-xs">
+          {busy ? "กำลังตรวจ…" : "ตรวจอีกครั้ง"}
+        </button>
+      </div>
+
+      {state === null ? (
+        <p className="text-xs text-slate-400">กำลังโหลด...</p>
+      ) : (
+        <div
+          className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+            good
+              ? "border-teal-400/40 bg-teal-500/10 text-teal-100"
+              : "border-amber-400/40 bg-amber-500/10 text-amber-100"
+          }`}
+        >
+          <p className="font-semibold">
+            {good ? "✓ เก็บห้องบน Redis — ใช้งานข้ามเครื่องได้จริง" : "⚠️ ยังเก็บในหน่วยความจำ"}
+          </p>
+          <p className="mt-1 opacity-90">{state.detail}</p>
+          {!good ? (
+            <p className="mt-1.5 opacity-90">
+              ต่อ Upstash ที่ Vercel → Storage → Marketplace แล้ว <b>Redeploy</b> หนึ่งครั้ง
+              (ค่า env มีผลหลัง deploy เท่านั้น) · ระหว่างนี้เจ้าภาพจะปลุกห้องที่หายกลับมาให้เอง
+              แต่ถ้าคำขอของแต่ละเครื่องวิ่งไปคนละ instance จะยังหลุดกันอยู่
+            </p>
+          ) : null}
+        </div>
+      )}
+    </section>
   );
 }
 
