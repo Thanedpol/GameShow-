@@ -218,6 +218,9 @@ export default function QuestionScreen() {
   );
   const [critiqueReason, setCritiqueReason] = useState<string | null>(null);
   const [transcribing, setTranscribing] = useState(false);
+  /** วินาทีที่ผ่านไประหว่างรอ AI ตรวจ — วัดจริงแล้วราว 6 วินาที ซึ่งนานพอที่จะ
+   *  ทำให้คนคิดว่าจอค้างถ้าไม่มีอะไรขยับให้เห็น */
+  const [gradeSecs, setGradeSecs] = useState(0);
   const [botTurn, setBotTurn] = useState<BotTurn | null>(null);
 
   const phaseRef = useRef<Local>(phase);
@@ -227,6 +230,16 @@ export default function QuestionScreen() {
   const resolvedRef = useRef(false);
   const hintKeyRef = useRef<string | null>(null);
   const nextBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // เดินตัวนับเฉพาะตอนกำลังตรวจ แล้วรีเซ็ตเมื่อออกจากช่วงนั้น
+  useEffect(() => {
+    if (phase !== "grading") {
+      setGradeSecs(0);
+      return;
+    }
+    const t = window.setInterval(() => setGradeSecs((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
   const timer = useCountdown(() => {
     const p = phaseRef.current;
@@ -956,6 +969,11 @@ export default function QuestionScreen() {
               ? "กำลังถอดสิ่งที่คุณพูดเป็นข้อความ..."
               : "AI กำลังตรวจคำตอบตามเกณฑ์ของข้อนี้..."}
           </p>
+          {!transcribing ? (
+            <p className="text-xs text-slate-500" aria-live="polite">
+              {gradeSecs} วินาที{gradeSecs >= 12 ? " · ช้ากว่าปกติ กำลังลองใหม่ให้" : ""}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

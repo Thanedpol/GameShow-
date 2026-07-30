@@ -432,6 +432,19 @@ export interface GradeResult {
   source: "llm" | "fallback";
 }
 
+/**
+ * เพดานคะแนนของโหมดสำรอง
+ *
+ * ตัวสำรองดูแค่ว่าคำตอบมีคำที่ตรงกับประเด็นสำคัญไหม มัน **แยกถูกจากผิดไม่ได้เลย**
+ * ทดสอบจริงแล้วคำตอบที่คำนวณผิด (ใช้ตัวคูณสลับกันจนได้ 335 แทน 185) ได้ไป 83 คะแนน
+ * เพราะบังเอิญมีคำครบทุกประเด็น — ซึ่งเป็นสิ่งที่ผู้ใช้สั่งห้ามชัดเจนว่า
+ * "ข้อนี้ผิด แต่ AI บอกถูกไม่ได้"
+ *
+ * จึงกดเพดานไว้ไม่ให้ไปแตะโซนที่อ่านแล้วเข้าใจว่า "ตอบถูก" และเขียนให้ชัดว่า
+ * ยังไม่ได้ตรวจจริง ต้องให้คนดูอีกรอบ ดีกว่าแสดงคะแนนสูงที่ไม่มีอะไรรองรับ
+ */
+const FALLBACK_MAX_SCORE = 50;
+
 /** ตรวจแบบหยาบ ๆ ตอนไม่มี API key — นับว่าแตะประเด็นสำคัญกี่ข้อ */
 function fallbackGrade(question: Question, answer: string): GradeResult {
   const text = answer.trim();
@@ -452,14 +465,15 @@ function fallbackGrade(question: Question, answer: string): GradeResult {
   );
   const coverage = points.length > 0 ? hit.length / points.length : 0.5;
   const lengthBonus = Math.min(0.25, text.length / 1200);
-  const score = Math.round(Math.min(100, (coverage * 0.75 + lengthBonus) * 100));
+  const raw = Math.round(Math.min(100, (coverage * 0.75 + lengthBonus) * 100));
   return {
-    score,
+    score: Math.min(FALLBACK_MAX_SCORE, raw),
     feedback:
-      `โหมดสำรอง (ยังต่อโมเดลไม่ได้) — ประเมินหยาบ ๆ จากการแตะประเด็นสำคัญ ` +
-      `${hit.length}/${points.length} ข้อ`,
-    strengths: hit.map((p) => `พูดถึง: ${p}`),
-    improvements: points.filter((p) => !hit.includes(p)).map((p) => `ยังไม่ได้พูดถึง: ${p}`),
+      `⚠️ ยังตรวจด้วย AI ไม่ได้ — นี่เป็นการประเมินหยาบ ๆ จากการนับคำเท่านั้น ` +
+      `ยังไม่ได้ตัดสินว่าคำตอบถูกหรือผิด กรรมการช่วยอ่านแล้วให้คะแนนเองอีกครั้ง ` +
+      `(แตะประเด็นสำคัญ ${hit.length}/${points.length} ข้อ)`,
+    strengths: hit.map((p) => `มีคำที่ตรงกับ: ${p}`),
+    improvements: points.filter((p) => !hit.includes(p)).map((p) => `ยังไม่เห็นคำที่ตรงกับ: ${p}`),
     source: "fallback",
   };
 }
@@ -496,20 +510,38 @@ export async function gradeOpenAnswer(
     .join("\n");
 
   const choice = resolveLlm(llm);
-  const parsed = isChoiceReady(choice)
-    ? await callLlmJson<{
-        score?: number;
-        feedback?: string;
-        strengths?: string[];
-        improvements?: string[];
-      }>(choice, {
+  type GradePayload = {
+    score?: number;
+    feedback?: string;
+    strengths?: string[];
+    improvements?: string[];
+  };
+  const askModel = () =>
+    callLlmJson<GradePayload>(choice, {
         system: GRADE_SYSTEM,
         prompt: userPrompt,
         schema: GRADE_SCHEMA as unknown as Record<string, unknown>,
-        maxTokens: 6000,
-        tag: "grade",
-      })
-    : null;
+        // อย่าลดลงมาต่ำกว่านี้ — เคยลองลดเป็น 900 เพราะคิดว่า JSON สั้น ๆ ไม่ต้องใช้เยอะ
+        // ผลคือโมเดลรุ่นที่คิดก่อนตอบใช้โควตาหมดไปกับการคิด แล้วคำตอบถูกตัดกลางคัน
+        // จน parse ไม่ผ่าน ตกไปใช้ fallbackGrade เงียบ ๆ ซึ่งให้คำตอบที่คำนวณผิดไป 83 คะแนน
+        // และเวลาที่ประหยัดได้จริงมีแค่ ~0.6 วินาที ไม่คุ้มกับความเสี่ยงเลย
+      maxTokens: 6000,
+      tag: "grade",
+    });
+
+  /**
+   * ลองใหม่หนึ่งครั้งก่อนยอมตกไปใช้ตัวสำรอง
+   *
+   * ตัวสำรองแยกถูกจากผิดไม่ได้ (ดู FALLBACK_MAX_SCORE) การตกไปใช้มันจึงควรเป็น
+   * ทางสุดท้ายจริง ๆ เหตุที่ทำให้พลาดส่วนใหญ่เป็นเรื่องชั่วคราว — โดนจำกัดอัตราเรียก
+   * เน็ตสะดุด หรือคำตอบถูกตัดกลางคัน ซึ่งยิงซ้ำครั้งเดียวก็มักผ่าน
+   * แลกกับเวลาที่เพิ่มขึ้นเฉพาะตอนที่รอบแรกพลาดเท่านั้น
+   */
+  let parsed = isChoiceReady(choice) ? await askModel() : null;
+  if (isChoiceReady(choice) && (!parsed || typeof parsed.score !== "number")) {
+    console.warn("[grade] ตรวจรอบแรกไม่สำเร็จ ลองใหม่อีกครั้งก่อนใช้โหมดสำรอง");
+    parsed = await askModel();
+  }
 
   if (!parsed || typeof parsed.score !== "number") {
     return fallbackGrade(question, answer);
