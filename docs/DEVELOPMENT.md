@@ -52,11 +52,21 @@ HINT_MODEL=claude-haiku-4-5
 | `GEMINI_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `gemini` |
 | `OPENROUTER_API_KEY` | ไม่ | ใช้เมื่อเลือก provider เป็น `openrouter` |
 | `OLLAMA_BASE_URL` | ไม่ | ดีฟอลต์ `http://127.0.0.1:11434` — บน Vercel เรียก localhost ไม่ได้ |
-| `HINT_MODEL` | ไม่ | โมเดลตั้งต้น ต้องเป็นชื่อของ provider ที่ตั้งไว้ ดีฟอลต์ `claude-opus-5` |
+| `HINT_MODEL` | ไม่ | โมเดลตั้งต้น ต้องเป็นชื่อของ provider ที่ตั้งไว้ · **ไม่ตั้งดีกว่า** ปล่อยให้ `DEFAULT_MODEL[provider]` เลือกเอง จะได้ไม่มีค่าค้างให้เก่า |
 | `REVEAL_SECRET` | ไม่ | คีย์เข้ารหัส label จริง/หลอก ไม่ตั้งจะ derive จาก API key |
 | `ADMIN_PASSWORD` | ไม่ | ถ้าตั้ง หน้า `/admin` แท็บ API จะต้องใส่รหัสก่อนแก้ |
 | `UPSTASH_REDIS_REST_URL` | ไม่ (แต่ต้องมีบน production) | ที่เก็บห้องเล่นข้ามเครื่อง — ไม่ตั้งจะใช้หน่วยความจำ |
 | `UPSTASH_REDIS_REST_TOKEN` | ไม่ (แต่ต้องมีบน production) | คู่กับตัวบน · รองรับชื่อ `KV_REST_API_*` ของ Vercel ด้วย |
+
+> ⚠️ **กับดักที่เคยทำให้ production พังเงียบ ๆ มาแล้ว**
+>
+> `LLM_PROVIDER` ที่ไม่ได้ตั้ง จะกลายเป็น `anthropic` เสมอ (`envChoice()` ใน `lib/llm.ts`)
+> ถ้าคีย์ที่มีจริงเป็นของค่ายอื่น ทุกจุดที่เรียก AI จะไม่ผ่าน `isChoiceReady()`
+> แล้ว**ตกไปใช้ของสำรองโดยไม่มี error ให้เห็นเลย** — เกมยังเล่นได้ แต่ AI ไม่ทำงาน
+>
+> **ตั้ง `LLM_PROVIDER` ให้ตรงกับคีย์ที่มีเสมอ** และอย่าตั้ง `HINT_MODEL` โดยไม่จำเป็น
+> ตอนนี้ `/admin` แท็บ API มีแถบเตือนขึ้นบนสุดให้แล้วเมื่อสองอย่างนี้ไม่ตรงกัน
+> (ดู `ServerDefaultWarning`) จะได้ไม่ต้องไปไล่หาเองว่าทำไมคำใบ้ดูจืด ๆ
 
 ---
 

@@ -1275,6 +1275,9 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         </p>
       </header>
 
+      {/* ══ เตือนตอนค่าตั้งต้นเซิร์ฟเวอร์ชี้ไปที่ค่ายที่ไม่มีคีย์ ═══════════ */}
+      <ServerDefaultWarning cfg={cfg} />
+
       {/* ══ เลือกค่าย ═════════════════════════════════════════════════════ */}
       <section className="panel p-4 sm:p-5">
         <h3 className="mb-3 text-sm font-bold text-white">เลือกค่าย</h3>
@@ -1737,6 +1740,52 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
 
       {/* ══ ที่เก็บห้องข้ามเครื่อง ══════════════════════════════════════════ */}
       <RoomStorageCard />
+    </div>
+  );
+}
+
+/**
+ * เตือนตอนที่ "ค่าตั้งต้นเซิร์ฟเวอร์" ชี้ไปที่ค่ายที่ไม่มีคีย์
+ *
+ * `envChoice()` ใน lib/llm.ts ตกกลับเป็น "anthropic" เมื่อไม่ได้ตั้ง LLM_PROVIDER
+ * ถ้าคีย์ที่มีจริงเป็นของค่ายอื่น ทุกจุดที่เรียก AI จะไม่ผ่าน `isChoiceReady()`
+ * แล้ว **ตกไปใช้คำใบ้สำเร็จรูปแบบเงียบ ๆ ไม่มี error ให้เห็นเลย** — เกมยังเล่นได้
+ * แต่ AI ไม่ทำงาน ซึ่งเป็นอาการที่หาสาเหตุยากที่สุดถ้าไม่มีอะไรบอก
+ *
+ * วางไว้บนสุดของแท็บ ไม่ยัดเข้าไปในกล่องที่พับเก็บ เพราะประเด็นทั้งหมดคือ
+ * มันเงียบเกินไปอยู่แล้ว เตือนแบบที่ต้องกดเปิดถึงจะเห็นก็ไม่ได้แก้อะไร
+ */
+function ServerDefaultWarning({ cfg }: { cfg: AdminConfigResponse | null }) {
+  if (!cfg) return null;
+
+  const serverReady = cfg.providers.find((p) => p.provider === cfg.serverProvider)?.ready ?? false;
+  if (serverReady) return null;
+
+  // เสนอเฉพาะค่ายที่ใช้คีย์จาก env จริง ๆ — ตัด Ollama ออกเพราะมัน ready เสมอ
+  // แต่ต้องมีเซิร์ฟเวอร์ Ollama รันอยู่ในเครื่องเดียวกัน ซึ่งบน Vercel ไม่มีทาง
+  const usable = cfg.providers.filter(
+    (p) => p.provider !== cfg.serverProvider && p.ready && p.envKey,
+  );
+  if (usable.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5 rounded-xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-xs leading-relaxed text-amber-100">
+      <p className="font-semibold">
+        ⚠️ ค่าตั้งต้นเซิร์ฟเวอร์ชี้ไปที่ <b className="font-mono">{cfg.serverProvider}</b>{" "}
+        ซึ่งยังไม่มีคีย์
+      </p>
+      <p>
+        ผู้เล่นที่ไม่ได้ใส่คีย์เองในเบราว์เซอร์จะได้ <b>คำใบ้สำเร็จรูปแทนของที่ AI แต่งสด</b>{" "}
+        โดยไม่มีข้อความแจ้งเตือนใด ๆ — ทั้งที่คีย์ของ{" "}
+        {usable.map((p) => p.label).join(" / ")} ใช้งานได้อยู่แล้ว
+      </p>
+      <p className="text-amber-200/90">
+        แก้โดยตั้ง <b className="font-mono">LLM_PROVIDER</b> ={" "}
+        <b className="font-mono">{usable[0].provider}</b> แล้ว Redeploy หนึ่งครั้ง
+        {cfg.environment === "production"
+          ? " (ค่า env มีผลหลัง deploy เท่านั้น)"
+          : ` (หรือใส่ใน .env.local แล้วรีสตาร์ท dev server)`}
+      </p>
     </div>
   );
 }
