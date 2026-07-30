@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import RoomPanel from "./RoomPanel";
+import { useRoom } from "@/lib/roomClient";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
 import { prefetchReady, startPrefetch, takeQuestions } from "@/lib/questionPrefetch";
@@ -18,6 +19,7 @@ const MODE_INFO: Array<{ mode: MatchMode; icon: string; detail: string }> = [
 
 export default function SetupScreen() {
   const { dispatch } = useGame();
+  const { isHost } = useRoom();
   const [mode, setMode] = useState<MatchMode>("bot");
   const [botLevel, setBotLevel] = useState<BotLevel>("ปกติ");
   const [count, setCount] = useState(2);
@@ -75,8 +77,18 @@ export default function SetupScreen() {
       prev.map((team, idx) => (idx === t ? team.map((x, j) => (j === m ? v : x)) : team)),
     );
 
+  /**
+   * โหมดทีมต้องเปิดห้องก่อนถึงจะเริ่มได้
+   *
+   * ทีมละ 2 คน คนที่สองต้องใช้อีกเครื่องเพื่อดูโจทย์และส่งข้อเสนอมาช่วยคิด
+   * ถ้าเริ่มเกมได้โดยไม่มีห้อง เพื่อนร่วมทีมก็เข้ามาไม่ได้เลย เท่ากับโหมดทีม
+   * กลายเป็นโหมดเดี่ยวที่พิมพ์ชื่อเยอะกว่าเดิมเฉย ๆ
+   */
+  const needsRoom = mode === "team" && !isHost;
+
   const ready = useMemo(() => {
     if (mode === "team") {
+      if (!isHost) return false;
       return Array.from({ length: slots }).every(
         (_, i) =>
           teamNames[i].trim().length > 0 &&
@@ -84,7 +96,7 @@ export default function SetupScreen() {
       );
     }
     return Array.from({ length: slots }).every((_, i) => names[i].trim().length > 0);
-  }, [mode, slots, names, teamNames, members]);
+  }, [mode, slots, names, teamNames, members, isHost]);
 
   async function handleStart() {
     if (!ready || starting) return;
@@ -321,7 +333,11 @@ export default function SetupScreen() {
           {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
         </button>
         {!ready ? (
-          <p className="text-center text-xs text-slate-500">กรอกชื่อให้ครบก่อนเริ่ม</p>
+          <p className="text-center text-xs text-slate-500">
+            {needsRoom
+              ? "โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่ เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้"
+              : "กรอกชื่อให้ครบก่อนเริ่ม"}
+          </p>
         ) : null}
       </section>
 
