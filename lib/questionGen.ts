@@ -3,7 +3,7 @@ import "server-only";
 import { SHARED_RULES } from "./hintEngine";
 import { callLlmJson, isChoiceReady, resolveLlm, type LlmChoiceInput } from "./llm";
 import { drawPerformanceTasks, drawSeeds, type QuestionSeed } from "./questionSeeds";
-import { harvest, type FeedGroup, type NewsItem } from "./sources";
+import { harvest, verifyLinks, type FeedGroup, type NewsItem } from "./sources";
 import {
   HINT_ZONES,
   type Category,
@@ -185,7 +185,13 @@ function buildPrompt(args: BuildPromptArgs): string {
     "",
     `แต่งมา ${args.count} ข้อ ตอบเป็น JSON ตามสคีมา`,
     "ฟิลด์ที่ไม่เกี่ยวกับรูปแบบนั้นให้ส่งค่าว่าง — choices เป็น [] · correctAnswer/task/rubric เป็น \"\"",
-    "sourceNote = ชื่อสำนักข่าวที่เอาประเด็นมา หรือ \"—\" ถ้าไม่ได้อิงชิ้นไหนเป็นพิเศษ",
+    "",
+    "⚠️ ทุกข้อต้องใส่ sourceUrl และ sourceNote:",
+    "- เลือกข่าว 1 ชิ้นจากรายการด้านบนที่ประเด็นของข้อนั้นโยงถึงได้",
+    "- คัดลอกลิงก์จากช่อง \"ลิงก์:\" ของข่าวชิ้นนั้นมาวางใน sourceUrl ให้ตรงทุกตัวอักษร",
+    "  ห้ามย่อ ห้ามตัดพารามิเตอร์ ห้ามพิมพ์ขึ้นเอง — ลิงก์ที่ไม่ตรงกับในรายการจะถูกทิ้ง",
+    "- sourceNote = ชื่อสำนักข่าวของชิ้นนั้น",
+    "- ผู้เล่นจะกดลิงก์นี้ไปตรวจว่าเฉลยถูกจริงไหม จึงต้องเป็นลิงก์ที่มีอยู่ในรายการเท่านั้น",
   );
   return lines.join("\n");
 }
@@ -362,6 +368,9 @@ export function validateQuestion(
   // รับลิงก์เฉพาะที่อยู่ในชุดที่ดึงมาจริง ที่โมเดลพิมพ์เองทิ้งทั้งหมด
   const claimedUrl = clean(raw.sourceUrl);
   const matchedSource = claimedUrl ? knownLinks?.get(claimedUrl) : undefined;
+  if (claimedUrl && !matchedSource) {
+    console.warn(`[questions] ทิ้งลิงก์ที่ไม่ตรงกับข่าวที่ดึงมา: ${claimedUrl.slice(0, 120)}`);
+  }
   const withSource = matchedSource
     ? { sourceUrl: claimedUrl, sourceName: matchedSource }
     : {};
@@ -608,6 +617,27 @@ export async function generateQuestions(options: GenerateOptions): Promise<Gener
     const got = (byStage.get(req.stage) ?? []).slice(0, req.count);
     questions.push(...got);
     if (got.length < req.count) shortfall[req.stage] = req.count - got.length;
+  }
+
+  /**
+   * ด่านสุดท้ายของแหล่งอ้างอิง — ยิงจริงดูว่าเปิดได้ไหม
+   *
+   * ผ่าน knownLinks มาแล้วแปลว่า "โมเดลไม่ได้แต่ง URL ขึ้นเอง" เท่านั้น
+   * ยังไม่ได้แปลว่าลิงก์นั้นเปิดได้ — ฟีดเองก็ให้ลิงก์เสียมาได้ (เจอกับ FTC มาแล้ว)
+   * ตรงนี้จึงตัดทิ้งทุกตัวที่ยืนยันไม่ได้ ยอมให้บางข้อไม่มีแหล่งอ้างอิง
+   * ดีกว่าโชว์ลิงก์ที่กดแล้วเจอ 404 หรือหน้าเปล่า
+   */
+  const cited = questions
+    .map((q) => q.sourceUrl)
+    .filter((url): url is string => Boolean(url));
+  if (cited.length > 0) {
+    const working = await verifyLinks(cited);
+    for (const q of questions) {
+      if (q.sourceUrl && !working.has(q.sourceUrl)) {
+        delete q.sourceUrl;
+        delete q.sourceName;
+      }
+    }
   }
 
   return {

@@ -461,6 +461,110 @@ async function fetchFeed(feed: FeedSource, perFeed: number): Promise<NewsItem[]>
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// ตรวจว่าลิงก์เปิดได้จริง
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ลิงก์ที่เอาไปโชว์เป็น "แหล่งให้ไปตรวจ" ต้องเปิดได้จริงเท่านั้น
+ *
+ * การเช็กแค่รูปแบบ URL ไม่พอ — ของจริงที่เจอมาแล้ว:
+ *   · ฟีด FTC ให้ guid ที่หน้าตาถูกต้องทุกอย่างแต่กดแล้ว 404
+ *   · บางเว็บตอบ 200 พร้อมหน้าเปล่าหรือหน้า "ไม่พบข้อมูล" (soft 404)
+ * ลิงก์เสียแย่กว่าไม่มีลิงก์ เพราะทำให้เฉลยที่อาจผิดอยู่แล้วดูเหมือนตรวจสอบมาแล้ว
+ *
+ * จึงยิงจริงทุกลิงก์ก่อนเอาไปแสดง และ "ตัดทิ้งเมื่อไม่แน่ใจ" เสมอ —
+ * ยอมเสียแหล่งอ้างอิงที่ใช้ได้ไปบ้าง ดีกว่าโชว์ลิงก์ที่กดแล้วเจอหน้าว่าง
+ */
+const LINK_CHECK_TIMEOUT_MS = 8_000;
+const LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_PROBE_BYTES = 80_000;
+
+/** เบราว์เซอร์จริงส่ง UA แบบนี้ — หลายเว็บบล็อก UA ที่ดูเป็นบอททันที */
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/125.0 Safari/537.36";
+
+/** ข้อความที่บอกว่าเป็นหน้า "ไม่พบ" ทั้งที่ตอบ 200 มา */
+const SOFT_404 =
+  /(page not found|404 not found|not found<\/title>|ไม่พบหน้า|ไม่พบข้อมูล|page you.{0,20}looking for|no longer available)/i;
+
+const linkCache = new Map<string, { at: number; ok: boolean }>();
+
+async function probeLink(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LINK_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "th,en;q=0.9",
+      },
+    });
+    if (!res.ok) return false;
+
+    // อ่านแค่ต้นหน้าพอ ไม่ต้องโหลดทั้งบทความ
+    const reader = res.body?.getReader();
+    if (!reader) return false;
+    let html = "";
+    let bytes = 0;
+    const decoder = new TextDecoder();
+    while (bytes < MAX_PROBE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value?.byteLength ?? 0;
+      html += decoder.decode(value, { stream: true });
+    }
+    void reader.cancel();
+
+    // หน้าเปล่าหรือหน้า "ไม่พบ" ถือว่าใช้ไม่ได้เหมือนกัน
+    if (html.trim().length < 500) return false;
+    if (SOFT_404.test(html.slice(0, 4000))) return false;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * ตรวจหลายลิงก์พร้อมกัน คืนเฉพาะตัวที่เปิดได้จริง
+ * แคชผลไว้ 6 ชั่วโมง เพราะลิงก์เดิมโผล่ซ้ำข้ามเกมบ่อยมาก
+ */
+export async function verifyLinks(urls: string[]): Promise<Set<string>> {
+  const unique = [...new Set(urls)].filter(Boolean);
+  const now = Date.now();
+  const good = new Set<string>();
+  const toCheck: string[] = [];
+
+  for (const url of unique) {
+    const hit = linkCache.get(url);
+    if (hit && now - hit.at < LINK_CACHE_TTL_MS) {
+      if (hit.ok) good.add(url);
+    } else {
+      toCheck.push(url);
+    }
+  }
+
+  const results = await Promise.all(
+    toCheck.map(async (url) => ({ url, ok: await probeLink(url) })),
+  );
+  for (const { url, ok } of results) {
+    linkCache.set(url, { at: now, ok });
+    if (ok) good.add(url);
+  }
+
+  const dropped = unique.length - good.size;
+  if (dropped > 0) {
+    console.warn(`[sources] ตัดลิงก์ที่เปิดไม่ได้ทิ้ง ${dropped} จาก ${unique.length} ลิงก์`);
+  }
+  return good;
+}
+
 function shuffle<T>(input: readonly T[]): T[] {
   const arr = [...input];
   for (let i = arr.length - 1; i > 0; i -= 1) {
