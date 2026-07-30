@@ -213,7 +213,7 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
             <p className="text-sm font-bold text-white">
               คลังคำถาม {questions.length} ข้อ
             </p>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-xs text-slate-400">
               {STAGES.map((s) => `${STAGE_TH[s]} ${counts.byStage[s]}`).join(" · ")} |{" "}
               {FORMATS.map((f) => `${FORMAT_TH[f]} ${counts.byFormat[f]}`).join(" · ")}
             </p>
@@ -319,7 +319,7 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
             </div>
             <p className="text-sm leading-relaxed text-slate-100">{q.prompt}</p>
             {q.format === "choice" ? (
-              <p className="mt-1 text-[11px] text-slate-400">
+              <p className="mt-1 text-xs text-slate-400">
                 เฉลย: <b className="text-teal-200">{q.correctAnswer}</b> ·{" "}
                 {q.choices?.length ?? 0} ตัวเลือก
               </p>
@@ -482,7 +482,7 @@ function QuestionEditor({
       )}
 
       <div className="rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] p-3">
-        <p className="mb-2 text-[11px] leading-relaxed text-cyan-100">
+        <p className="mb-2 text-xs leading-relaxed text-cyan-100">
           คำใบ้ของข้อนี้ — บรรทัดละ 1 อัน ควรมีอย่างละ 3 อัน
           เพราะกล่องหนึ่งข้อสุ่มได้สูงสุด 3 กล่องต่อฝั่ง
           <br />
@@ -657,7 +657,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               }`}
             >
               <p className="text-sm font-bold text-white">{label}</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-400">{detail}</p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">{detail}</p>
             </button>
           ))}
         </div>
@@ -665,7 +665,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
         {s.questionSource === "live" ? (
           <>
             <div>
-              <p className="mb-1.5 text-[11px] font-semibold text-slate-300">
+              <p className="mb-1.5 text-xs font-semibold text-slate-300">
                 หมวดข่าวที่อนุญาตให้เอามาตั้งคำถาม
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -682,7 +682,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                             : [...s.feedGroups, g],
                         })
                       }
-                      className={`rounded-lg border px-2.5 py-1 text-[11px] transition ${
+                      className={`rounded-lg border px-2.5 py-1 text-xs transition ${
                         on
                           ? "border-teal-300/70 bg-teal-400/20 text-teal-100"
                           : "border-stage-edge bg-white/[0.03] text-slate-400 hover:bg-white/[0.08]"
@@ -693,7 +693,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                   );
                 })}
               </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
                 ปิดหมดทุกหมวด = ใช้ทุกหมวด · ตั้งใจไม่มีหมวด “ข่าวด่วนทั่วไป”
                 เพราะเกมนี้แปะคำใบ้หลอกลงบนข้อมูล จึงไม่ควรเอาไปแตะข่าวสงคราม
                 คดีความ หรือภัยพิบัติที่มีคนเดือดร้อนจริง
@@ -701,7 +701,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
             </div>
 
             <div className="border-t border-white/10 pt-3">
-              <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+              <label className="mb-1 block text-xs font-semibold text-slate-300">
                 โจทย์ “หาจุดผิดจากภาพ” กี่ข้อต่อเกม
               </label>
               <input
@@ -712,7 +712,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                 onChange={(e) => setS({ ...s, imageCount: Number(e.target.value) })}
                 className="field w-24 py-1.5 text-sm"
               />
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
                 AI วาดภาพที่มีจุดผิดซ่อนอยู่ แล้วให้ผู้เล่นหาให้เจอ · ภาพละราว 2.4 บาท
                 ({s.imageCount} ข้อ ≈ {(s.imageCount * 2.4).toFixed(0)} บาท/เกม)
                 · ใส่ 0 เพื่อปิดภาพทั้งหมด · กล่องคำใบ้ของข้อที่มีภาพจะผสมทั้งภาพและข้อความ
@@ -729,7 +729,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               >
                 {trying ? "กำลังลอง..." : !cfg ? "กำลังอ่านค่า..." : "ลองสร้างดู 3 ข้อ"}
               </button>
-              <span className="text-[11px] text-slate-500">
+              <span className="text-xs text-slate-500">
                 จำคำถามที่เคยเล่นไว้ {seenTotal} ข้อ
               </span>
               <button
@@ -739,7 +739,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                   resetPrefetch();
                   onFlash("ล้างความจำกันซ้ำแล้ว — คำถามเก่าจะกลับมาโผล่ได้อีก");
                 }}
-                className="text-[11px] text-slate-500 underline hover:text-slate-300"
+                className="text-xs text-slate-500 underline hover:text-slate-300"
               >
                 ล้างความจำ
               </button>
@@ -747,7 +747,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
 
             {trial ? (
               <div
-                className={`space-y-2 rounded-xl border px-3 py-2.5 text-[11px] leading-relaxed ${
+                className={`space-y-2 rounded-xl border px-3 py-2.5 text-xs leading-relaxed ${
                   trial.ok
                     ? "border-teal-300/50 bg-teal-400/10 text-teal-50"
                     : "border-rose-400/50 bg-rose-500/10 text-rose-50"
@@ -755,7 +755,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
               >
                 <p className="font-semibold">{trial.message}</p>
                 {trial.detail.map((d, i) => (
-                  <p key={i} className="font-mono text-[10px] leading-relaxed opacity-90">
+                  <p key={i} className="font-mono text-xs leading-relaxed opacity-90">
                     {d}
                   </p>
                 ))}
@@ -804,7 +804,7 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
             />
           </Field>
         </div>
-        <p className="text-[11px] leading-relaxed text-slate-400">
+        <p className="text-xs leading-relaxed text-slate-400">
           กล่องที่วางไว้จะมีทั้งใบ้จริงและใบ้หลอกอย่างน้อยอย่างละ 1 เสมอ
           ส่วนจะเปิดได้กี่กล่องกำหนดแยกตามช่วงด้านล่าง
         </p>
@@ -884,14 +884,14 @@ function RulesTab({ onFlash }: { onFlash: (m: string) => void }) {
                   />
                 </Field>
               </div>
-              <p className="mt-1.5 text-[11px] text-slate-400">
+              <p className="mt-1.5 text-xs text-slate-400">
                 เปิดครบโควตา {s.maxOpenBoxes[stage]} กล่อง จะเหลือ{" "}
                 <b className="text-slate-200">{remain}%</b> ของคะแนนข้อนั้น
               </p>
             </div>
           );
         })}
-        <p className="text-[11px] text-slate-400">
+        <p className="text-xs text-slate-400">
           รวม <b className="text-slate-200">{total} ข้อ</b> ต่อ 1 เกม · เวลาเล่นประมาณ{" "}
           <b className="text-slate-200">{Math.round(totalSeconds / 60)} นาที</b>
         </p>
@@ -1303,12 +1303,12 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-sm font-bold text-white">{p.label}</span>
                   {configured ? (
-                    <span className="chip bg-teal-400/20 px-2 py-0.5 text-[10px] text-teal-100">
+                    <span className="chip bg-teal-400/20 px-2 py-0.5 text-xs text-teal-100">
                       ตั้งค่าแล้ว
                     </span>
                   ) : null}
                 </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-400">{p.blurb}</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">{p.blurb}</p>
               </button>
             );
           })}
@@ -1332,7 +1332,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         ) : null}
 
         {llm.provider === "auto" ? (
-          <p className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-3 py-2.5 text-[11px] leading-relaxed text-sky-100">
+          <p className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-3 py-2.5 text-xs leading-relaxed text-sky-100">
             กำลังใช้ค่าของเซิร์ฟเวอร์ — ตอนนี้คือ <b>{cfg?.serverProvider ?? "—"}</b>
             {cfg?.serverModel ? (
               <>
@@ -1356,7 +1356,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         {/* API key ของค่ายที่กำลังใช้ */}
         {activeInfo.keyUrl ? (
           <div>
-            <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+            <label className="mb-1 block text-xs font-semibold text-slate-300">
               API key
             </label>
             <div className="flex gap-2">
@@ -1385,7 +1385,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                 บันทึก
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
               {browserKey ? (
                 <span className="text-teal-300">ใช้คีย์ในเบราว์เซอร์นี้</span>
               ) : activeStatus?.ready ? (
@@ -1424,7 +1424,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         {/* Ollama ใช้ URL แทนคีย์ */}
         {effectiveProvider === "ollama" ? (
           <div>
-            <label className="mb-1 block text-[11px] font-semibold text-slate-300">
+            <label className="mb-1 block text-xs font-semibold text-slate-300">
               ที่อยู่เซิร์ฟเวอร์ Ollama
             </label>
             <div className="flex gap-2">
@@ -1445,7 +1445,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                 บันทึก
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
               ไม่ต้องใช้คีย์ — แต่เซิร์ฟเวอร์ต้องต่อถึงเครื่องที่รัน Ollama ได้
               บนเว็บจริงจะเรียก localhost ของคุณไม่ได้
             </p>
@@ -1454,7 +1454,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
 
         {/* โมเดล */}
         <div>
-          <label className="mb-1 block text-[11px] font-semibold text-slate-300">โมเดล</label>
+          <label className="mb-1 block text-xs font-semibold text-slate-300">โมเดล</label>
           <input
             value={customModel}
             onChange={(e) => {
@@ -1475,7 +1475,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                   key={s.id}
                   onClick={() => pickModel(s.id)}
                   title={s.tag}
-                  className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] transition ${
+                  className={`rounded-lg border px-2.5 py-1 font-mono text-xs transition ${
                     llm.model === s.id
                       ? "border-sky-400 bg-sky-500/20 text-white"
                       : "border-stage-edge bg-white/[0.03] text-slate-300 hover:bg-white/[0.08]"
@@ -1487,7 +1487,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               <button
                 onClick={() => void fetchModels()}
                 disabled={loadingModels}
-                className="rounded-lg border border-stage-edge bg-white/[0.03] px-2.5 py-1 text-[10px] text-slate-300 transition hover:bg-white/[0.08] disabled:opacity-50"
+                className="rounded-lg border border-stage-edge bg-white/[0.03] px-2.5 py-1 text-xs text-slate-300 transition hover:bg-white/[0.08] disabled:opacity-50"
               >
                 {loadingModels ? "กำลังโหลด..." : "ดูรายชื่อจริงทั้งหมด"}
               </button>
@@ -1495,7 +1495,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
           ) : null}
 
           {modelError ? (
-            <p className="mt-2 rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-[11px] leading-relaxed text-rose-100">
+            <p className="mt-2 rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-100">
               {modelError}
             </p>
           ) : null}
@@ -1520,21 +1520,21 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                         : "border-stage-edge bg-white/[0.03] hover:bg-white/[0.07]"
                     }`}
                   >
-                    <p className="truncate text-[11px] font-semibold text-slate-100">
+                    <p className="truncate text-xs font-semibold text-slate-100">
                       {m.label}
                     </p>
-                    <p className="truncate font-mono text-[10px] text-slate-500">{m.id}</p>
+                    <p className="truncate font-mono text-xs text-slate-500">{m.id}</p>
                   </button>
                 ))}
               </div>
               {filteredModels.length > MODEL_PAGE_SIZE ? (
-                <p className="text-[10px] text-slate-500">
+                <p className="text-xs text-slate-500">
                   แสดง {MODEL_PAGE_SIZE} จาก {filteredModels.length} รายการ —
                   พิมพ์ค้นหาเพื่อกรองให้แคบลง
                 </p>
               ) : null}
               {filteredModels.length === 0 ? (
-                <p className="text-[11px] text-slate-400">ไม่มีโมเดลที่ตรงกับคำค้น</p>
+                <p className="text-xs text-slate-400">ไม่มีโมเดลที่ตรงกับคำค้น</p>
               ) : null}
             </div>
           ) : null}
@@ -1552,7 +1552,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
             </span>
           </summary>
 
-          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+          <p className="mt-2 text-xs leading-relaxed text-slate-400">
             เว้นว่าง = ใช้โมเดลหลักด้านบน · งานที่ต้องแม่น (แต่งคำถาม / ตรวจคำตอบ)
             ควรใช้ตัวที่เก่งกว่า ส่วนงานที่เรียกถี่แต่ได้ข้อความสั้น (คำใบ้)
             ใช้ตัวถูกได้ · ช่องภาพและเสียงต้องใส่ชื่อโมเดลคนละตระกูลกับข้อความ
@@ -1565,8 +1565,8 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
               return (
                 <div key={task} className="rounded-lg border border-stage-edge/70 p-2.5">
                   <div className="flex flex-wrap items-baseline justify-between gap-1">
-                    <span className="text-[11px] font-bold text-sky-200">{info.label}</span>
-                    <span className="text-[10px] text-slate-500">{info.detail}</span>
+                    <span className="text-xs font-bold text-sky-200">{info.label}</span>
+                    <span className="text-xs text-slate-500">{info.detail}</span>
                   </div>
                   <input
                     value={llm.taskModels[task] ?? ""}
@@ -1585,7 +1585,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                     }
                     autoComplete="off"
                     spellCheck={false}
-                    className="field mt-1.5 py-1.5 font-mono text-[11px]"
+                    className="field mt-1.5 py-1.5 font-mono text-xs"
                   />
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {suggestion.map((id) => (
@@ -1595,7 +1595,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                           setLlm({ ...llm, taskModels: { ...llm.taskModels, [task]: id } });
                           setTestResult(null);
                         }}
-                        className={`rounded border px-1.5 py-0.5 font-mono text-[9px] transition ${
+                        className={`rounded border px-1.5 py-0.5 font-mono text-xs transition ${
                           llm.taskModels[task] === id
                             ? "border-sky-400 bg-sky-500/20 text-white"
                             : "border-stage-edge bg-white/[0.03] text-slate-400 hover:bg-white/[0.08]"
@@ -1611,7 +1611,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
                           delete next[task];
                           setLlm({ ...llm, taskModels: next });
                         }}
-                        className="rounded border border-stage-edge px-1.5 py-0.5 text-[9px] text-slate-500 hover:text-slate-300"
+                        className="rounded border border-stage-edge px-1.5 py-0.5 text-xs text-slate-500 hover:text-slate-300"
                       >
                         ล้าง
                       </button>
@@ -1633,7 +1633,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
             </p>
             <button
               onClick={handleResetChoice}
-              className="mt-0.5 text-[11px] text-slate-500 underline hover:text-slate-300"
+              className="mt-0.5 text-xs text-slate-500 underline hover:text-slate-300"
             >
               คืนค่าเริ่มต้น
             </button>
@@ -1671,7 +1671,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
         <summary className="cursor-pointer text-sm font-bold text-white">
           🔧 ข้อมูลเทคนิค
           {cfg?.misspelledEnv.length ? (
-            <span className="ml-2 text-[11px] font-normal text-amber-300">
+            <span className="ml-2 text-xs font-normal text-amber-300">
               (มี {cfg.misspelledEnv.length} เรื่องต้องดู)
             </span>
           ) : null}
@@ -1745,7 +1745,7 @@ function ApiTab({ onFlash }: { onFlash: (m: string) => void }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-semibold text-slate-300">{label}</span>
+      <span className="mb-1 block text-xs font-semibold text-slate-300">{label}</span>
       {children}
     </label>
   );

@@ -66,7 +66,7 @@ export default function TimerRing({
         </div>
       </div>
       {label ? (
-        <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
           {label}
         </span>
       ) : null}

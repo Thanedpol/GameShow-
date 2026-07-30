@@ -208,7 +208,7 @@ export default function SetupScreen() {
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-slate-500">
+          <p className="text-xs text-slate-500">
             บอทตัดสินใจจากความน่าจะเป็นตามระดับความยากของข้อ (ไม่ได้เรียก LLM
             เพื่อไม่ให้กินเวลาในนาฬิกา 60 วินาที)
           </p>

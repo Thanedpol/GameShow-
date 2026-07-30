@@ -102,7 +102,7 @@ export default function DebriefScreen() {
                       {p.name} {isWinner ? "🏆" : ""}
                     </p>
                     {p.members.length > 0 ? (
-                      <p className="truncate text-[11px] text-slate-500">
+                      <p className="truncate text-xs text-slate-500">
                         {p.members.join(" · ")}
                       </p>
                     ) : null}
@@ -112,7 +112,7 @@ export default function DebriefScreen() {
                   {p.score}
                 </span>
               </div>
-              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-400 sm:grid-cols-4">
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400 sm:grid-cols-4">
                 <div className="flex justify-between">
                   <dt>ได้คะแนน</dt>
                   <dd className="tabular text-slate-200">
@@ -228,7 +228,7 @@ export default function DebriefScreen() {
               className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-white/5 pb-2 last:border-0"
             >
               <span className="tabular w-6 shrink-0 text-slate-500">{i + 1}.</span>
-              <span className="text-[11px] text-slate-500">
+              <span className="text-xs text-slate-500">
                 {STAGE_LABEL[r.stage]} · {FORMAT_LABEL[r.format]}
               </span>
               <span className="flex-1 basis-full text-slate-300 sm:basis-auto">
@@ -258,7 +258,7 @@ export default function DebriefScreen() {
         เล่นใหม่
       </button>
 
-      <p className="pb-4 text-center text-[11px] leading-relaxed text-slate-500">
+      <p className="pb-4 text-center text-xs leading-relaxed text-slate-500">
         คำใบ้ทั้งหมดในเกมนี้สร้างขึ้นเพื่อความบันเทิงและฝึกการคิดวิเคราะห์
         ส่วนที่ถูกออกแบบให้หลอกเป็นเรื่องแต่ง ห้ามนำไปใช้อ้างอิงจริง
       </p>

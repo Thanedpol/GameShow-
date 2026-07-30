@@ -57,14 +57,14 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
       <section className="panel space-y-3 p-4">
         <div>
           <h2 className="text-sm font-bold text-white">เล่นข้ามเครื่อง</h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">
             ทีมละ 2 คนใช้คอมคนละเครื่องได้ — เปิดห้องแล้วส่งลิงก์ให้เพื่อน
             ทุกเครื่องจะเห็นคำถาม นาฬิกา และกล่องคำใบ้ชุดเดียวกัน
           </p>
         </div>
 
         <label className="block">
-          <span className="mb-1 block text-[11px] font-semibold text-slate-300">
+          <span className="mb-1 block text-xs font-semibold text-slate-300">
             ชื่อของคุณ
           </span>
           <input
@@ -85,7 +85,7 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
 
         <div className="flex items-center gap-3">
           <span className="h-px flex-1 bg-white/10" />
-          <span className="text-[10px] text-slate-500">หรือเข้าห้องที่เพื่อนเปิดไว้</span>
+          <span className="text-xs text-slate-500">หรือเข้าห้องที่เพื่อนเปิดไว้</span>
           <span className="h-px flex-1 bg-white/10" />
         </div>
 
@@ -126,7 +126,7 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
           <h2 className="text-sm font-bold text-white">
             {isHost ? "คุณเป็นเจ้าภาพห้องนี้" : "คุณกำลังตามห้องนี้อยู่"}
           </h2>
-          <p className="mt-0.5 text-[11px] text-slate-400">
+          <p className="mt-0.5 text-xs text-slate-400">
             {isHost
               ? "เครื่องนี้คุมเกม กดเริ่มและกดตอบจากที่นี่"
               : "รอเจ้าภาพกดเริ่มเกม แล้วจอจะตามอัตโนมัติ"}
@@ -138,7 +138,7 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
       </div>
 
       <div className="rounded-xl border border-sky-400/40 bg-sky-500/10 p-3 text-center">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-sky-200/80">
+        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-200/80">
           รหัสห้อง
         </p>
         <p className="mt-1 font-mono text-3xl font-extrabold tracking-[0.35em] text-white">
@@ -155,10 +155,10 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
         </button>
       </div>
 
-      {copied ? <p className="text-center text-[11px] text-teal-200">✓ {copied}</p> : null}
+      {copied ? <p className="text-center text-xs text-teal-200">✓ {copied}</p> : null}
 
       <div>
-        <p className="mb-1.5 text-[11px] font-semibold text-slate-300">
+        <p className="mb-1.5 text-xs font-semibold text-slate-300">
           อยู่ในห้องตอนนี้ ({members.length})
         </p>
         <ul className="space-y-1">
@@ -170,10 +170,10 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-teal-400" />
               <span className="truncate text-slate-100">{m.name}</span>
               {m.isHost ? (
-                <span className="ml-auto shrink-0 text-[10px] text-sky-300">เจ้าภาพ</span>
+                <span className="ml-auto shrink-0 text-xs text-sky-300">เจ้าภาพ</span>
               ) : null}
               {m.id === session.memberId ? (
-                <span className="ml-auto shrink-0 text-[10px] text-slate-500">คุณ</span>
+                <span className="ml-auto shrink-0 text-xs text-slate-500">คุณ</span>
               ) : null}
             </li>
           ))}
@@ -181,7 +181,7 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
       </div>
 
       {backend === "memory" ? (
-        <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-100">
+        <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
           ⚠️ เซิร์ฟเวอร์ยังเก็บห้องไว้ในหน่วยความจำ — ใช้ทดสอบในเครื่องได้ปกติ
           แต่บนเซิร์ฟเวอร์จริงห้องจะหลุดเป็นช่วง ๆ ต้องต่อ Redis ก่อนถึงจะใช้งานจริงได้
           (ดูวิธีใน docs/DEVELOPMENT.md)

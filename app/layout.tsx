@@ -30,7 +30,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <SafetyBanner />
         <RoomProvider>
           <GameProvider>
-            <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-5 sm:px-6">
+            {/*
+              max-w-3xl (768px) เป็นความกว้างที่อ่านข้อความยาวได้สบาย จึงยังเป็นฐาน
+              แต่บนจอ 1440px มันเหลือที่ว่างสองข้างรวม 47% ของจอ ซึ่งเปล่าประโยชน์
+              สำหรับเกมที่มักฉายขึ้นจอใหญ่ให้คนดูหลายคน จึงขยายเป็น 896px บนจอ xl
+              ไม่ขยายไปมากกว่านี้เพราะบรรทัดข้อความจะยาวจนสายตาไล่ไม่ทัน
+            */}
+            <main className="mx-auto w-full max-w-3xl px-4 pb-16 pt-5 sm:px-6 xl:max-w-4xl">
               {children}
             </main>
           </GameProvider>

@@ -22,7 +22,7 @@ export default function TeammateNotes({ questionId }: { questionId: string }) {
           💬 เพื่อนร่วมทีมส่งมา ({current.length})
         </h3>
         {isHost ? (
-          <button onClick={() => void clearIntents()} className="text-[10px] text-slate-400 hover:text-slate-200">
+          <button onClick={() => void clearIntents()} className="text-xs text-slate-400 hover:text-slate-200">
             ล้าง
           </button>
         ) : null}

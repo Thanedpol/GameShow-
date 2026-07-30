@@ -29,6 +29,38 @@
   textarea {
     field-sizing: content;
   }
+
+  /**
+   * เป้าแตะขั้นต่ำ 44x44 ตามเกณฑ์ของทั้ง Apple และ WCAG
+   *
+   * ตั้งเป็นพื้นให้ทุกปุ่มเลย เพราะวัดจริงแล้วเจอปุ่มสูง 34-43px กระจายหลายที่
+   * (ปุ่มไมค์ ปุ่มระดับบอท ปุ่มส่งคำตอบ) ซึ่งกดพลาดง่ายมากบนมือถือ
+   * โดยเฉพาะเกมที่จับเวลา — กดพลาดหนึ่งครั้งคือเสียวินาทีที่เรียกคืนไม่ได้
+   */
+  button,
+  [role="button"] {
+    min-height: 44px;
+  }
+
+  /* ปุ่มที่อยู่ในบรรทัดข้อความ (เช่นลิงก์ "ล้างความจำ") ไม่ควรถูกยืด */
+  button.inline-link {
+    min-height: 0;
+  }
+
+  /**
+   * เคารพการตั้งค่า "ลดการเคลื่อนไหว" ของระบบ
+   * บางคนเวียนหัวกับ animation และเกมนี้มีทั้งเด้ง หมุน และกะพริบ
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer components {

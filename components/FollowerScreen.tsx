@@ -104,7 +104,7 @@ export default function FollowerScreen() {
     <div className="animate-popIn space-y-4">
       <header className="flex items-center justify-between gap-3 pt-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.25em] text-sky-300/80">
+          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-300/80">
             โหมดติดตาม · ห้อง {session?.code}
           </p>
           <p className="mt-0.5 truncate text-sm font-bold text-white">
@@ -121,7 +121,7 @@ export default function FollowerScreen() {
             }`}
           >
             <p className="font-mono text-2xl font-extrabold text-white">{secondsLeft}</p>
-            <p className="text-[9px] text-slate-400">วินาที</p>
+            <p className="text-xs text-slate-400">วินาที</p>
           </div>
         ) : null}
       </header>
@@ -168,12 +168,12 @@ export default function FollowerScreen() {
                 key={b.id}
                 className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-4 py-3"
               >
-                <p className="text-[10px] font-bold text-sky-300">กล่อง {b.label}</p>
+                <p className="text-xs font-bold text-sky-300">กล่อง {b.label}</p>
                 <p className="mt-1 text-sm leading-relaxed text-slate-100">{b.text}</p>
               </div>
             ))
           )}
-          <p className="text-[10px] text-slate-500">
+          <p className="text-xs text-slate-500">
             ⚠️ ในกล่องมีทั้งใบ้จริงและใบ้หลอก ยังไม่เฉลยจนกว่าจะจบข้อ
           </p>
         </section>
@@ -198,7 +198,7 @@ export default function FollowerScreen() {
           className="field resize-none text-sm"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-slate-500">
+          <span className="text-xs text-slate-500">
             {sent ? "✓ ส่งไปขึ้นจอเพื่อนแล้ว" : "Enter เพื่อส่ง · Shift+Enter ขึ้นบรรทัดใหม่"}
           </span>
           <button

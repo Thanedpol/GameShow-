@@ -45,13 +45,13 @@ export default function ScoreBoard({ activeId = null }: { activeId?: string | nu
                 {p.name}
               </span>
               {active ? (
-                <span className="chip shrink-0 bg-white/15 px-2 py-0.5 text-[9px] text-white">
+                <span className="chip shrink-0 bg-white/15 px-2 py-0.5 text-xs text-white">
                   ถึงตา
                 </span>
               ) : null}
             </div>
             {p.members.length > 0 ? (
-              <p className="truncate text-[10px] text-slate-500">{p.members.join(" · ")}</p>
+              <p className="truncate text-xs text-slate-500">{p.members.join(" · ")}</p>
             ) : null}
             <div className="tabular mt-1 text-2xl font-extrabold leading-none text-white">
               {p.score}

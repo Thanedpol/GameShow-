@@ -59,7 +59,7 @@ function HintBoxBody({ box, imageUrl }: { box: HintBox; imageUrl?: string }) {
               className="h-full w-full scale-[2.2] object-cover"
             />
           </div>
-          <p className="mt-1 text-center text-[10px] text-sky-200/80">
+          <p className="mt-1 text-center text-xs text-sky-200/80">
             🔍 ซูมโซน{box.zone}ของภาพ
           </p>
         </div>
@@ -118,10 +118,49 @@ function MicButton({
         )}
       </button>
       {speech.error ? (
-        <span className="text-[10px] text-amber-300">{speech.error}</span>
+        <span className="text-xs text-amber-300">{speech.error}</span>
       ) : busy && speech.mode === "upload" ? (
-        <span className="text-[10px] text-slate-500">พูดจบแล้วกดหยุด เดี๋ยวถอดให้</span>
+        <span className="text-xs text-slate-500">พูดจบแล้วกดหยุด เดี๋ยวถอดให้</span>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * แถบปุ่มลงมือที่ติดขอบล่างจอ
+ *
+ * วัดจริงบนมือถือแนวนอน (812x375) แล้วเจอว่าปุ่ม "ส่งคำตอบ" อยู่ที่ y=769
+ * แปลว่าต้องเลื่อนลง 2.3 เท่าของความสูงจอกว่าจะกดได้ ทั้งที่นาฬิกาเดินอยู่
+ * ในเกมจับเวลา การทำให้ปุ่มตอบไปไม่ถึงคือการลงโทษผู้เล่นด้วยเรื่องที่ไม่ใช่ความรู้
+ *
+ * จึงตรึงไว้ล่างจอ พร้อมพื้นทึบและเงาบนขอบ เพื่อไม่ให้เนื้อหาที่เลื่อนผ่าน
+ * ด้านหลังอ่านทะลุออกมา · เผื่อ safe-area ของมือถือที่มีแถบขีดล่างด้วย
+ */
+function ActionBar({
+  counter,
+  children,
+}: {
+  counter?: string;
+  children: React.ReactNode;
+}) {
+  // ไม่มีปุ่มก็ไม่ต้องมีแถบ ไม่งั้นจะเหลือขอบเส้นลอย ๆ กินที่ล่างจอเปล่า ๆ
+  const hasAction = Array.isArray(children)
+    ? children.some(Boolean)
+    : Boolean(children);
+  if (!hasAction) return null;
+
+  return (
+    <div
+      className="sticky bottom-0 z-20 -mx-4 mt-2 border-t border-stage-edge/70
+                 bg-stage-bg/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]
+                 pt-3 backdrop-blur sm:-mx-6 sm:px-6"
+    >
+      <div className="flex items-center justify-between gap-3">
+        {counter ? (
+          <span className="shrink-0 text-xs tabular text-slate-500">{counter}</span>
+        ) : null}
+        <div className="flex flex-1 items-center justify-end gap-2">{children}</div>
+      </div>
     </div>
   );
 }
@@ -686,7 +725,7 @@ export default function QuestionScreen() {
               alt="ภาพประกอบโจทย์ — หาจุดที่ผิดในภาพนี้"
               className="w-full rounded-xl border border-stage-edge bg-white/[0.03]"
             />
-            <figcaption className="mt-1.5 text-center text-[11px] text-slate-500">
+            <figcaption className="mt-1.5 text-center text-xs text-slate-500">
               ภาพนี้สร้างด้วย AI และมีจุดที่ผิดอยู่ — หาให้เจอก่อนหมดเวลา
             </figcaption>
           </figure>
@@ -738,7 +777,7 @@ export default function QuestionScreen() {
                     key={b.id}
                     className="animate-popIn rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
                   >
-                    <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                    <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
                       กล่อง {b.label}
                     </span>
                     <HintBoxBody box={b} imageUrl={question.imageUrl} />
@@ -758,7 +797,7 @@ export default function QuestionScreen() {
                   <span className="text-xs font-bold text-sky-100">
                     {b ? `กล่อง ${b.label}` : "กำลังเตรียม"}
                   </span>
-                  <span className="text-[10px] text-slate-400">
+                  <span className="text-xs text-slate-400">
                     {!b ? "" : openLimitReached ? "ครบโควตาแล้ว" : `−${Math.round(cfg.boxCostRatio * 100)}%`}
                   </span>
                 </button>
@@ -767,11 +806,11 @@ export default function QuestionScreen() {
           </div>
 
           {hintFailed ? (
-            <p className="text-[11px] text-rose-300">
+            <p className="text-xs text-rose-300">
               เตรียมกล่องคำใบ้ไม่สำเร็จ — ข้อนี้เล่นต่อได้โดยไม่มีคำใบ้
             </p>
           ) : hintSource === "fallback" && boxes ? (
-            <p className="text-[11px] text-cyan-200/70">
+            <p className="text-xs text-cyan-200/70">
               โหมดสำรอง — ยังต่อโมเดลไม่ได้ (เช็กที่หลังบ้าน → แท็บ API)
             </p>
           ) : null}
@@ -794,7 +833,7 @@ export default function QuestionScreen() {
                 key={b.id}
                 className="rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
               >
-                <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
                   กล่อง {b.label}
                 </span>
                 <HintBoxBody box={b} imageUrl={question.imageUrl} />
@@ -816,7 +855,7 @@ export default function QuestionScreen() {
           <p className="text-sm text-slate-300">
             🤖 {active.name} {question.format === "performance" ? "กำลังโชว์" : "กำลังคิด"}...
           </p>
-          <p className="text-[11px] text-slate-500">
+          <p className="text-xs text-slate-500">
             บอทอาจเปิดกล่องคำใบ้ และก็โดนใบ้หลอกได้เหมือนกัน
           </p>
         </div>
@@ -856,19 +895,6 @@ export default function QuestionScreen() {
               🎤 {interim}
             </p>
           ) : null}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-slate-500">{text.length}/1200</span>
-            <div className="flex items-center gap-2">
-              <MicButton onAppend={appendSpoken} onInterim={setInterim} />
-              <button
-                onClick={() => void finish(false)}
-                disabled={!text.trim()}
-                className="btn-primary px-6 py-2.5 text-sm"
-              >
-                ส่งคำตอบ
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
 
@@ -913,17 +939,10 @@ export default function QuestionScreen() {
                 placeholder="พิมพ์สิ่งที่คุณพูดหรือแสดงไป..."
                 className="field min-h-[130px] resize-y leading-relaxed"
               />
-              <span className="text-[11px] text-slate-500">{text.length}/1200</span>
+              <span className="text-xs text-slate-500">{text.length}/1200</span>
             </>
           ) : null}
 
-          <button
-            onClick={() => void finish(false)}
-            disabled={!micWorks && !text.trim()}
-            className="btn-teal w-full py-4 text-lg disabled:opacity-50"
-          >
-            จบการแสดง → ส่งให้ตรวจ
-          </button>
         </div>
       ) : null}
 
@@ -1037,7 +1056,7 @@ export default function QuestionScreen() {
                 เชื่อไปเรื่อย ๆ ซึ่งขัดกับแก่นของเกมที่สอนให้ตรวจสอบก่อนเชื่อ
                 ลิงก์ตรงนี้ผ่านการเทียบกับชุดข่าวที่ระบบดึงมาจริงแล้ว ไม่ใช่ที่ AI พิมพ์เอง */}
             {question.sourceUrl ? (
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">
                 ที่มาของประเด็น:{" "}
                 <a
                   href={question.sourceUrl}
@@ -1070,17 +1089,17 @@ export default function QuestionScreen() {
                   <>
                     <p className="text-xs leading-relaxed text-teal-50">{critique.summary}</p>
                     {critique.strengths.map((s, i) => (
-                      <p key={`s${i}`} className="text-[11px] leading-relaxed text-teal-100">
+                      <p key={`s${i}`} className="text-xs leading-relaxed text-teal-100">
                         ✓ {s}
                       </p>
                     ))}
                     {critique.improvements.map((s, i) => (
-                      <p key={`i${i}`} className="text-[11px] leading-relaxed text-amber-100">
+                      <p key={`i${i}`} className="text-xs leading-relaxed text-amber-100">
                         → {s}
                       </p>
                     ))}
                     {critique.technique ? (
-                      <p className="border-t border-white/10 pt-1.5 text-[11px] leading-relaxed text-slate-300">
+                      <p className="border-t border-white/10 pt-1.5 text-xs leading-relaxed text-slate-300">
                         <b className="text-slate-200">จุดที่หูคนทั่วไปมักไม่ทัน:</b>{" "}
                         {critique.technique}
                       </p>
@@ -1093,7 +1112,7 @@ export default function QuestionScreen() {
                 )}
               </div>
             ) : critiqueState === "failed" ? (
-              <p className="mt-3 rounded-lg border border-white/10 px-3 py-2 text-[11px] text-slate-500">
+              <p className="mt-3 rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-500">
                 ไม่ได้ฟีดแบ็กจากโค้ชรอบนี้ — {critiqueReason}
               </p>
             ) : null}
@@ -1157,11 +1176,11 @@ export default function QuestionScreen() {
                     }`}
                   >
                     <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                      <span className="chip bg-white/10 px-2 py-0.5 text-[10px] text-slate-200">
+                      <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
                         กล่อง {b.label}
                       </span>
                       <span
-                        className={`chip px-2 py-0.5 text-[10px] ${
+                        className={`chip px-2 py-0.5 text-xs ${
                           b.truth === "จริง"
                             ? "bg-teal-400/25 text-teal-100"
                             : "bg-rose-500/25 text-rose-100"
@@ -1170,13 +1189,13 @@ export default function QuestionScreen() {
                         {b.truth === "จริง" ? "✅ ใบ้จริง" : "🎭 ใบ้หลอก"}
                       </span>
                       {wasOpened ? (
-                        <span className="chip bg-sky-500/20 px-2 py-0.5 text-[10px] text-sky-100">
+                        <span className="chip bg-sky-500/20 px-2 py-0.5 text-xs text-sky-100">
                           คุณเปิดกล่องนี้
                         </span>
                       ) : null}
                     </div>
                     <p className="text-xs leading-relaxed text-white">{b.text}</p>
-                    <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
                       <b className="text-slate-300">ทำไมถึงใบ้แบบนี้:</b> {b.rationale}
                     </p>
                   </div>
@@ -1185,14 +1204,56 @@ export default function QuestionScreen() {
             </div>
           ) : null}
 
-          <button
-            ref={nextBtnRef}
-            onClick={() => dispatch({ type: "NEXT_QUESTION" })}
-            className="btn-primary w-full py-4 text-lg"
-          >
-            {isLast ? "ดูสรุปผล" : "ข้อถัดไป"}
-          </button>
         </div>
+      ) : null}
+
+      {/* ── แถบปุ่มลงมือ ────────────────────────────────────────────────────
+          ต้องเป็นลูกคนสุดท้ายของกล่องนอกสุด ไม่ใช่ซ่อนอยู่ในบล็อกย่อย
+          เพราะ sticky ยึดกับ "กล่องแม่" ถ้าแม่เตี้ยกว่าจอ มันก็ไม่มีที่ให้ติด
+          (ลองวางไว้ในบล็อกอัตนัยก่อนแล้ววัดได้ y=607 บนจอสูง 375 คือไม่ติดเลย) */}
+      {!isBotTurn ? (
+        <ActionBar
+          counter={
+            (phase === "answering" && question.format === "open") ||
+            (phase === "performing" && !micWorks)
+              ? `${text.length}/1200`
+              : ""
+          }
+        >
+          {phase === "answering" && question.format === "open" ? (
+            <>
+              <MicButton onAppend={appendSpoken} onInterim={setInterim} />
+              <button
+                onClick={() => void finish(false)}
+                disabled={!text.trim()}
+                className="btn-primary flex-1 text-base sm:flex-none sm:px-8"
+              >
+                ส่งคำตอบ
+              </button>
+            </>
+          ) : phase === "performing" ? (
+            <>
+              {micWorks ? null : (
+                <MicButton onAppend={appendSpoken} onInterim={setInterim} />
+              )}
+              <button
+                onClick={() => void finish(false)}
+                disabled={!micWorks && !text.trim()}
+                className="btn-teal flex-1 text-base disabled:opacity-50"
+              >
+                จบการแสดง → ส่งให้ตรวจ
+              </button>
+            </>
+          ) : phase === "result" && outcome ? (
+            <button
+              ref={nextBtnRef}
+              onClick={() => dispatch({ type: "NEXT_QUESTION" })}
+              className="btn-primary flex-1 text-base"
+            >
+              {isLast ? "ดูสรุปผล" : "ข้อถัดไป"}
+            </button>
+          ) : null}
+        </ActionBar>
       ) : null}
     </div>
   );
