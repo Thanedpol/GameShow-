@@ -1,5 +1,6 @@
 import { POINTS } from "./questionPoints";
 import { EXTRA_QUESTIONS } from "./questionsExtra";
+import { KNOWLEDGE_QUESTIONS } from "./questionsKnowledge";
 import type { Question, Stage } from "./types";
 
 export { POINTS };
@@ -642,12 +643,16 @@ const CORE_QUESTIONS: Question[] = [
 ];
 
 /**
- * คลังเต็ม 60 ข้อ = ชุดหลัก 20 + ส่วนขยาย 40
+ * คลังเต็ม = ชุดหลัก 20 + ส่วนขยาย 40 + ความรู้ทั่วไป 30
  *
- * ใช้เป็นตัวสำรองเมื่อไม่มีคีย์ AI เน็ตล่ม หรือหลังบ้านเลือกโหมด "ใช้คลังในเครื่อง"
+ * ใช้เป็นตัวสำรองเมื่อไม่มีคีย์ AI เน็ตล่ม โควตาหมด หรือหลังบ้านเลือกโหมด "ใช้คลังในเครื่อง"
  * ปกติเกมจะแต่งคำถามสดจากข่าวจริงแทน (ดู lib/questionGen.ts)
  */
-export const QUESTION_BANK: Question[] = [...CORE_QUESTIONS, ...EXTRA_QUESTIONS];
+export const QUESTION_BANK: Question[] = [
+  ...CORE_QUESTIONS,
+  ...EXTRA_QUESTIONS,
+  ...KNOWLEDGE_QUESTIONS,
+];
 
 export function getQuestionById(id: string): Question | undefined {
   return QUESTION_BANK.find((q) => q.id === id);

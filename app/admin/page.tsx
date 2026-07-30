@@ -153,6 +153,7 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
   const [custom, setCustom] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Stage | "all">("all");
+  const [search, setSearch] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -176,7 +177,35 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
     return { byStage, byFormat };
   }, [questions]);
 
-  const shown = questions.filter((q) => filter === "all" || q.stage === filter);
+  /**
+   * ค้นทั้งข้อ ไม่ใช่แค่หัวข้อ
+   *
+   * คลังมีเกือบร้อยข้อแล้ว การหาข้อที่จะแก้ด้วยการเลื่อนดูทีละใบไม่ไหวอีกต่อไป
+   * และบ่อยครั้งสิ่งที่จำได้ไม่ใช่ตัวคำถาม แต่เป็นคำในตัวเลือก ในเฉลย หรือในคำใบ้
+   * จึงกวาดทุกช่องที่เป็นข้อความ แล้วเทียบแบบไม่สนตัวพิมพ์ใหญ่เล็ก
+   */
+  const shown = useMemo(() => {
+    const byStage = questions.filter((q) => filter === "all" || q.stage === filter);
+    const needle = search.trim().toLowerCase();
+    if (!needle) return byStage;
+    return byStage.filter((q) =>
+      [
+        q.id,
+        q.prompt,
+        q.category,
+        q.explanation,
+        q.correctAnswer,
+        q.rubric,
+        q.task,
+        ...(q.choices ?? []),
+        ...(q.keyPoints ?? []),
+        ...(q.hints?.real ?? []),
+        ...(q.hints?.fake ?? []),
+      ]
+        .filter((v): v is string => typeof v === "string")
+        .some((v) => v.toLowerCase().includes(needle)),
+    );
+  }, [questions, filter, search]);
 
   function handleExport() {
     const blob = new Blob([JSON.stringify(questions, null, 2)], {
@@ -219,14 +248,50 @@ function QuestionsTab({ onFlash }: { onFlash: (m: string) => void }) {
               {FORMATS.map((f) => `${FORMAT_TH[f]} ${counts.byFormat[f]}`).join(" · ")}
             </p>
           </div>
-          <span
-            className={`chip ${
-              custom ? "bg-cyan-400/20 text-cyan-100" : "bg-white/10 text-slate-300"
-            }`}
-          >
-            {custom ? "ใช้คลังที่แก้เอง" : "ใช้คลังตั้งต้น"}
-          </span>
+          <div className="flex items-center gap-2">
+            {/* ช่องค้นหาอยู่ตรงนี้เพราะเป็นสิ่งที่ต้องใช้ก่อนจะทำอะไรกับคลังที่มีเกือบร้อยข้อ
+                ไม่ใช่เครื่องมือเสริมที่ซ่อนไว้ท้ายแถวปุ่ม */}
+            <label className="relative">
+              <span className="sr-only">ค้นหาในคลังคำถาม</span>
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-500"
+              >
+                🔍
+              </span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="ค้นหา…"
+                className="field w-44 py-2 pl-9 pr-8 text-sm sm:w-56"
+              />
+              {search ? (
+                <button
+                  onClick={() => setSearch("")}
+                  aria-label="ล้างคำค้น"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1 text-sm text-slate-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </label>
+            <span
+              className={`chip shrink-0 ${
+                custom ? "bg-cyan-400/20 text-cyan-100" : "bg-white/10 text-slate-300"
+              }`}
+            >
+              {custom ? "ใช้คลังที่แก้เอง" : "ใช้คลังตั้งต้น"}
+            </span>
+          </div>
         </div>
+
+        {search.trim() ? (
+          <p className="text-xs text-slate-400">
+            พบ <b className="text-sky-200">{shown.length}</b> ข้อที่มีคำว่า “{search.trim()}”
+            {filter === "all" ? "" : ` ในช่วง${STAGE_TH[filter]}`} — ค้นทั้งโจทย์ ตัวเลือก
+            เฉลย และคำใบ้
+          </p>
+        ) : null}
 
         <div className="flex flex-wrap gap-2">
           <button
