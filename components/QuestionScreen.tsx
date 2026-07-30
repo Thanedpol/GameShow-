@@ -16,8 +16,8 @@ import {
 } from "./StageView";
 import { useGame } from "@/lib/gameStore";
 import { useRoom } from "@/lib/roomClient";
-import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
-import { hintMultiplier } from "@/lib/scoring";
+import { BOT_LEVELS, botRemark, planBotTurn, type BotLevel } from "@/lib/bot";
+import { activeParticipantIndex, hintMultiplier } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
 import { takeHints, warmHints } from "@/lib/hintPrefetch";
 import { shrinkImage } from "@/lib/shrinkImage";
@@ -37,18 +37,20 @@ import type {
 } from "@/lib/types";
 
 /**
- * ช่วงของหนึ่งข้อ
+ * ช่วงของหนึ่งข้อ — ขึ้นข้อมาก็ตอบได้เลย ไม่มีจอคั่นให้กดอะไรก่อน
  *
- * `buzzing` = ทุกคนเห็นโจทย์เดียวกัน แข่งกันกดปุ่มเพื่อชิงสิทธิ์ตอบ
+ * เคยมีช่วง `buzzing` ให้แข่งกันกดชิงสิทธิ์ตอบ ใส่ไว้เพื่อให้คนกับบอท
+ * เจอโจทย์ข้อเดียวกัน (ของเดิมผลัดกันตอบคนละข้อ คะแนนเลยเทียบกันไม่ได้)
+ * แต่พอเล่นจริงมันกลายเป็นจอขวางทุกข้อ — ต้องกดเลือกคนตอบก่อนถึงจะเห็นช่องตอบ
+ * และในโหมดที่มีผู้เล่นคนเดียว ก็เหลือปุ่มให้กดใบเดียวซึ่งไม่ได้ตัดสินอะไรเลย
  *
- * เดิมไม่มีช่วงนี้ — ใช้ `questionIndex % จำนวนผู้เล่น` ผลัดกันตอบคนละข้อ
- * แปลว่าคนกับบอทไม่เคยเจอโจทย์เดียวกันเลย คะแนนจึงเทียบกันไม่ได้จริง
+ * ตอนนี้แก้ปัญหาเดิมด้วยวิธีที่ไม่ต้องมีจอคั่น: บอทตอบข้อเดียวกับคนเสมอ
+ * โดยตอบตามหลังทันทีที่คนส่งคำตอบ (ดู commit) ส่วนโหมดหลายคนก็ผลัดกันตอบ
+ * ตามลำดับข้อ ตรงกับที่เขียนไว้บนการ์ดเลือกโหมดว่า "2–4 คน ผลัดกันตอบ"
  *
- * ส่วนช่วง `steal` (แย่งตอบหลังคนแรกตอบผิด) ถูกตัดทิ้ง เพราะการชิงกดตั้งแต่ต้น
- * ทำหน้าที่เดียวกันอยู่แล้ว เก็บไว้ทั้งคู่กติกาจะซ้อนกันจนคนดูตามไม่ทัน
+ * ส่วนช่วง `steal` (แย่งตอบหลังคนแรกตอบผิด) ถูกตัดทิ้งไปก่อนหน้านี้แล้ว
  */
 type Local =
-  | "buzzing"
   | "answering"
   | "performing"
   | "grading"
@@ -129,13 +131,20 @@ export default function QuestionScreen() {
   const question = state.questions[state.currentQuestionIndex];
 
   /**
-   * ใครได้สิทธิ์ตอบข้อนี้ — มาจากการกดชิงตอบ ไม่ใช่ผลัดตามลำดับอีกแล้ว
-   * undefined = ยังไม่มีใครกด (อยู่ในช่วง buzzing)
+   * ใครเป็นคนตอบข้อนี้
+   *
+   * โหมดดวลบอท — คนตอบทุกข้อ ส่วนบอทตอบข้อเดียวกันตามหลัง (ดู commit)
+   * ถ้าให้บอทผลัดมาตอบเป็นบางข้อ คนจะได้เจอโจทย์คนละชุดกับบอท เทียบคะแนนไม่ได้
+   * โหมดอื่น — ผลัดกันตอบตามลำดับข้อ ตรงกับที่เขียนบนการ์ดเลือกโหมด
    */
-  const [buzzedId, setBuzzedId] = useState<string | null>(null);
-  const active: Participant | undefined = state.participants.find((p) => p.id === buzzedId);
+  const bot = state.participants.find((p) => p.kind === "bot") ?? null;
+  const active: Participant | undefined = bot
+    ? state.participants.find((p) => p.kind !== "bot")
+    : state.participants[
+        activeParticipantIndex(state.currentQuestionIndex, state.participants.length)
+      ];
 
-  const [phase, setPhase] = useState<Local>("buzzing");
+  const [phase, setPhase] = useState<Local>("answering");
   const [boxes, setBoxes] = useState<HintBox[] | null>(null);
   const [revealToken, setRevealToken] = useState<string | null>(null);
   const [hintSource, setHintSource] = useState<"llm" | "fallback">("llm");
@@ -154,8 +163,6 @@ export default function QuestionScreen() {
   const [interim, setInterim] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [revealed, setRevealed] = useState<RevealedHintBox[] | null>(null);
-  /** ไม่มีใครกดชิงตอบจนหมดเวลา — ข้อนั้นผ่านไปโดยไม่มีใครได้และไม่มีใครเสีย */
-  const [noBuzz, setNoBuzz] = useState(false);
   // ── โค้ชเสียง — ของแถมของข้อโชว์ความสามารถ พังได้โดยไม่กระทบเกม ──────────
   const recorder = useVoiceRecorder();
   const [critique, setCritique] = useState<VoiceCritique | null>(null);
@@ -167,7 +174,14 @@ export default function QuestionScreen() {
   /** วินาทีที่ผ่านไประหว่างรอ AI ตรวจ — วัดจริงแล้วราว 6 วินาที ซึ่งนานพอที่จะ
    *  ทำให้คนคิดว่าจอค้างถ้าไม่มีอะไรขยับให้เห็น */
   const [gradeSecs, setGradeSecs] = useState(0);
-  const [botTurn, setBotTurn] = useState<BotTurn | null>(null);
+  /** ผลของบอทในข้อเดียวกัน — โผล่ในหน้าเฉลยข้างผลของคน */
+  const [botResult, setBotResult] = useState<{
+    name: string;
+    points: number;
+    quality: number;
+    boxesOpened: number;
+    remark: string;
+  } | null>(null);
 
   const phaseRef = useRef<Local>(phase);
   phaseRef.current = phase;
@@ -204,13 +218,6 @@ export default function QuestionScreen() {
   const timer = useCountdown(() => {
     const p = phaseRef.current;
     if (p === "answering" || p === "performing") void finish(true);
-    // หมดเวลาโดยไม่มีใครกดชิงตอบ — ข้อนั้นผ่านไปเฉย ๆ ไม่บันทึกรอบ
-    // เพราะไม่มีเจ้าของคำตอบให้ผูกคะแนนด้วย
-    else if (p === "buzzing") {
-      setNoBuzz(true);
-      setPhase("result");
-      if (revealTokenRef.current) void loadReveal(revealTokenRef.current);
-    }
   });
   const { start: startTimer, stop: stopTimer } = timer;
 
@@ -220,7 +227,6 @@ export default function QuestionScreen() {
   const openedBoxes = (boxes ?? []).filter((b) => openedIds.includes(b.id));
   const tokenSpent = useToken && openedIds.length > 0;
   const paidBoxes = Math.max(0, openedIds.length - (tokenSpent ? 1 : 0));
-  const isBotTurn = active?.kind === "bot";
   const cfg = state.settings;
   // เวลาและจำนวนกล่องที่เปิดได้ ต่างกันในแต่ละช่วง
   const stageSeconds = question ? cfg.seconds[question.stage] : 60;
@@ -250,10 +256,9 @@ export default function QuestionScreen() {
   // ── รีเซ็ตต่อข้อ + เริ่มนาฬิกา 60 วิ (ไม่มีการหยุดพักระหว่างข้อ) ──────────
   useEffect(() => {
     resolvedRef.current = false;
-    // ทุกข้อเริ่มที่ช่วงชิงตอบเสมอ ไม่ว่ารูปแบบไหน — ต้องมีคนกดก่อนถึงได้ตอบ
-    setPhase("buzzing");
-    setBuzzedId(null);
-    setNoBuzz(false);
+    // ขึ้นข้อมาก็เข้าช่วงตอบทันที ไม่มีจอคั่นให้กดเลือกคนตอบก่อน
+    setPhase(question?.format === "performance" ? "performing" : "answering");
+    setBotResult(null);
     setOpenedIds([]);
     setUseToken(false);
     setChoice(null);
@@ -261,7 +266,6 @@ export default function QuestionScreen() {
     setInterim("");
     setOutcome(null);
     setRevealed(null);
-    setBotTurn(null);
     setBoxes(null);
     setRevealToken(null);
     revealTokenRef.current = null;
@@ -398,14 +402,14 @@ export default function QuestionScreen() {
    * ไม่ได้สิทธิ์ก็ไม่เป็นไร ตัวฮุกจัดการสถานะเองแล้ว เกมเดินต่อได้
    */
   useEffect(() => {
-    if (phase !== "performing" || isBotTurn) return;
+    if (phase !== "performing") return;
     void recorder.start();
     // ตั้งใจ "ไม่" คืนฟังก์ชันเคลียร์ตรงนี้
     // เพราะพอกด "จบการแสดง" เฟสจะเปลี่ยนเป็น rating ทันที ถ้าเคลียร์ตอนนั้น
     // ไมค์จะถูกปิดแข่งกับ recorder.stop() ที่กำลังเก็บคลิปอยู่ แล้วคลิปจะขาด
     // การปล่อยไมค์ทำที่ stop() อยู่แล้ว ส่วนกรณีออกกลางคันมี reset ตอนขึ้นข้อใหม่
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, isBotTurn, state.currentQuestionIndex]);
+  }, [phase, state.currentQuestionIndex]);
 
   const loadReveal = useCallback(async (token: string) => {
     try {
@@ -432,20 +436,13 @@ export default function QuestionScreen() {
       strengths?: string[];
       improvements?: string[];
       remark?: string;
-      /**
-       * เทิร์นบอทเปิดกล่องแล้ว commit ในจังหวะเดียวกัน state จึงยังไม่อัปเดต
-       * ต้องส่งกล่องที่เปิดเข้ามาตรง ๆ ไม่งั้นบอทจะได้คำใบ้ฟรีโดยไม่ถูกหักคะแนน
-       */
-      boxesOverride?: HintBox[];
     }) => {
       if (!question || !active) return;
       stopTimer();
 
-      const usedBoxes = opts.boxesOverride ?? openedBoxes;
+      const usedBoxes = openedBoxes;
       const usedCount = usedBoxes.length;
-      const usedPaid = opts.boxesOverride
-        ? usedCount
-        : paidBoxes;
+      const usedPaid = paidBoxes;
 
       const points = (() => {
         if (opts.timedOut || opts.quality <= 0) return 0;
@@ -466,7 +463,7 @@ export default function QuestionScreen() {
           answer: opts.answer,
           quality: opts.quality,
           boxesOpened: usedCount,
-          tokenSpent: opts.boxesOverride ? false : tokenSpent,
+          tokenSpent,
           timedOut: opts.timedOut,
           feedback: opts.feedback,
           openedBoxes:
@@ -493,14 +490,69 @@ export default function QuestionScreen() {
       });
       if (revealToken) void loadReveal(revealToken);
 
-      // ตอบผิดก็จบข้อนั้นเลย ไม่เปิดให้คนอื่นแย่งต่อ — สิทธิ์ตอบถูกชิงกันไปแล้ว
-      // ตั้งแต่ช่วง buzzing การเปิดให้แย่งอีกรอบเท่ากับให้โอกาสสองครั้ง
+      /**
+       * บอทตอบข้อเดียวกันทันทีที่คนส่งคำตอบ
+       *
+       * นี่คือเหตุผลที่ตัดช่วงชิงกดตอบออกได้ — ปัญหาเดิมคือบอทกับคนเจอโจทย์
+       * คนละชุดจนเทียบคะแนนกันไม่ได้ พอให้บอทตอบทุกข้อตามหลัง ทั้งคู่ก็เจอ
+       * โจทย์ชุดเดียวกันครบ 20 ข้อ โดยไม่ต้องมีจอให้กดเลือกคนตอบมาคั่น
+       *
+       * บอทเปิดกล่องเองได้และโดนหักคะแนนเหมือนกัน แต่ไม่ใช้โทเคน
+       * (โทเคนเป็นรางวัลของคนที่ตอบถูกโดยไม่เปิดกล่อง ให้บอทใช้ด้วยจะงงเปล่า ๆ)
+       */
+      if (bot) {
+        const level = BOT_LEVELS.find((l) => bot.name.includes(l)) ?? ("ปกติ" as BotLevel);
+        const plan = planBotTurn(question, level);
+        const botBoxes = boxes ? boxes.slice(0, Math.min(plan.boxesOpened, maxOpen)) : [];
+        const botPoints =
+          plan.quality <= 0
+            ? 0
+            : Math.max(
+                0,
+                Math.round(
+                  question.pointValue *
+                    hintMultiplier(botBoxes.length, cfg.boxCostRatio) *
+                    (plan.quality / 100),
+                ),
+              );
+        dispatch({
+          type: "RESOLVE_ROUND",
+          payload: {
+            participantId: bot.id,
+            answer: plan.choice ?? "(บอทตอบ)",
+            quality: plan.quality,
+            boxesOpened: botBoxes.length,
+            tokenSpent: false,
+            timedOut: false,
+            openedBoxes:
+              revealToken && botBoxes.length > 0
+                ? botBoxes.map((b) => ({
+                    boxId: b.id,
+                    boxLabel: b.label,
+                    text: b.text,
+                    revealToken,
+                  }))
+                : undefined,
+          },
+        });
+        setBotResult({
+          name: bot.name,
+          points: botPoints,
+          quality: plan.quality,
+          boxesOpened: botBoxes.length,
+          remark: botRemark({ ...plan, boxesOpened: botBoxes.length }, level),
+        });
+      }
+
+      // ตอบผิดก็จบข้อนั้นเลย ไม่เปิดให้คนอื่นแย่งต่อ — กติกาแย่งตอบถูกตัดไปแล้ว
       setPhase("result");
     },
     [
       question,
       active,
-      openedIds.length,
+      bot,
+      boxes,
+      maxOpen,
       openedBoxes,
       paidBoxes,
       tokenSpent,
@@ -508,9 +560,7 @@ export default function QuestionScreen() {
       cfg.boxCostRatio,
       dispatch,
       loadReveal,
-      startTimer,
       stopTimer,
-      timer.remaining,
     ],
   );
 
@@ -652,18 +702,6 @@ export default function QuestionScreen() {
     [question, choice, commit, stopTimer],
   );
 
-  /**
-   * กดชิงสิทธิ์ตอบ — คนแรกที่กดได้ไปคนเดียว
-   *
-   * นาฬิกาไม่รีสตาร์ท ใช้เวลาที่เหลือของข้อนั้นต่อเลย จะได้ไม่มีใครได้เปรียบ
-   * จากการกดช้าเพื่อยืดเวลาคิด
-   */
-  function buzz(participantId: string) {
-    if (phaseRef.current !== "buzzing") return;
-    setBuzzedId(participantId);
-    setPhase(question?.format === "performance" ? "performing" : "answering");
-  }
-
   /** ต่อข้อความที่พูดท้ายของเดิม ไม่ทับ — ผู้เล่นอาจพิมพ์ค้างไว้แล้ว */
   const appendSpoken = useCallback((spoken: string) => {
     setInterim("");
@@ -678,55 +716,6 @@ export default function QuestionScreen() {
     setOpenedIds((prev) => [...prev, id]);
   }
 
-  /**
-   * บอทกดชิงตอบเอง
-   *
-   * ต้องมีเวลาตอบสนอง ไม่งั้นบอทจะกดชนะทุกข้อจนคนไม่ได้เล่น
-   * สุ่ม 4-10 วินาที — คนที่รู้คำตอบอยู่แล้วกดทันสบาย ๆ ส่วนคนที่ต้องคิดนานจะโดนตัดหน้า
-   * ซึ่งเป็นความกดดันที่ตั้งใจให้มี
-   */
-  useEffect(() => {
-    if (phase !== "buzzing" || !question) return;
-    const bot = state.participants.find((p) => p.kind === "bot");
-    if (!bot) return;
-
-    const delay = (4 + Math.random() * 6) * 1000;
-    const id = window.setTimeout(() => {
-      if (phaseRef.current !== "buzzing") return;
-      buzz(bot.id);
-    }, delay);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, state.currentQuestionIndex]);
-
-  // ── เทิร์นของบอท ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    // ครอบคลุม "performing" ด้วย ไม่งั้นข้อโชว์ความสามารถของบอทจะค้าง
-    // แล้วค้างรอคำตอบของการแสดงที่ไม่เคยเกิดขึ้น
-    if (!isBotTurn || !question || (phase !== "answering" && phase !== "performing")) return;
-    const plan = planBotTurn(question, "ปกติ");
-    setBotTurn(plan);
-    const delay = Math.min(plan.thinkSeconds, Math.max(3, stageSeconds - 4)) * 1000;
-    const id = window.setTimeout(() => {
-      if (resolvedRef.current) return;
-      resolvedRef.current = true;
-      // บอทก็ติดโควตาการเปิดกล่องของช่วงนั้นเหมือนคนจริง
-      const botBoxes = boxes ? boxes.slice(0, Math.min(plan.boxesOpened, maxOpen)) : [];
-      if (botBoxes.length > 0) setOpenedIds(botBoxes.map((b) => b.id));
-      commit({
-        answer: plan.choice ?? "(บอทตอบ)",
-        quality: plan.quality,
-        timedOut: false,
-        remark: botRemark({ ...plan, boxesOpened: botBoxes.length }, "ปกติ"),
-        boxesOverride: botBoxes,
-      });
-    }, delay);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBotTurn, state.currentQuestionIndex, phase, boxes]);
-
-  // ช่วง buzzing ยังไม่มีใครได้สิทธิ์ตอบ active จึงเป็น undefined ตามปกติ
-  // ห้ามเช็ก !active แล้ว return null ไม่งั้นจอจะว่างทั้งช่วงชิงตอบ
   if (!question) return null;
 
   const totalQuestions = state.questions.length;
@@ -740,17 +729,17 @@ export default function QuestionScreen() {
         question={question}
         index={state.currentQuestionIndex}
         total={totalQuestions}
-        activeLine={active ? `${active.name} ได้สิทธิ์ตอบ` : "ทุกคนแข่งกันกดชิงตอบ"}
+        activeLine={active ? `${active.name} ตอบข้อนี้` : "—"}
         remaining={timer.remaining}
         totalMs={stageSeconds * 1000}
-        timerLabel={phase === "buzzing" ? "ชิงกดตอบ" : "เวลาที่เหลือ"}
+        timerLabel="เวลาที่เหลือ"
         paused={phase === "grading" || phase === "result"}
       />
 
       <QuestionPanel question={question} imageUrl={question.imageUrl} />
 
       {/* ── กล่องคำใบ้ 4 กล่อง ─────────────────────────────────────────── */}
-      {(phase === "answering" || phase === "performing") && !isBotTurn ? (
+      {phase === "answering" || phase === "performing" ? (
         <div className="space-y-2">
           {active && active.tokens > 0 ? (
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100">
@@ -804,53 +793,8 @@ export default function QuestionScreen() {
         </div>
       ) : null}
 
-      {/* ── ชิงกดตอบ ────────────────────────────────────────────────────── */}
-      {phase === "buzzing" ? (
-        <section className="panel space-y-3 p-4">
-          <div className="text-center">
-            <p className="text-sm font-bold text-white">ใครตอบข้อนี้ได้ กดชิงเลย</p>
-            <p className="mt-0.5 text-xs text-slate-400">
-              ทุกคนเจอโจทย์เดียวกัน · ใครกดก่อนได้สิทธิ์ตอบคนเดียว
-            </p>
-          </div>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            {state.participants.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => buzz(p.id)}
-                disabled={p.kind === "bot"}
-                className="rounded-2xl border-2 border-sky-400/50 bg-sky-500/15 px-4 py-5
-                           text-base font-extrabold text-white transition
-                           hover:bg-sky-500/25 active:scale-[0.97] disabled:opacity-45"
-              >
-                {p.kind === "bot" ? "🤖 " : ""}
-                {p.name}
-                {p.kind === "bot" ? (
-                  <span className="mt-1 block text-xs font-normal text-slate-400">
-                    บอทกดชิงเอง
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {/* ── บอทกำลังคิด ─────────────────────────────────────────────────── */}
-      {isBotTurn && (phase === "answering" || phase === "performing") ? (
-        <div className="panel flex flex-col items-center gap-2 p-8 text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-teal-300" />
-          <p className="text-sm text-slate-300">
-            🤖 {active?.name} {question.format === "performance" ? "กำลังโชว์" : "กำลังคิด"}...
-          </p>
-          <p className="text-xs text-slate-500">
-            บอทอาจเปิดกล่องคำใบ้ และก็โดนใบ้หลอกได้เหมือนกัน
-          </p>
-        </div>
-      ) : null}
-
       {/* ── ปรนัย ───────────────────────────────────────────────────────── */}
-      {phase === "answering" && !isBotTurn && question.format === "choice" ? (
+      {phase === "answering" && question.format === "choice" ? (
         <div className="grid gap-2.5">
           {(question.choices ?? []).map((c) => (
             <button
@@ -868,7 +812,7 @@ export default function QuestionScreen() {
       ) : null}
 
       {/* ── อัตนัย ──────────────────────────────────────────────────────── */}
-      {phase === "answering" && !isBotTurn && question.format === "open" ? (
+      {phase === "answering" && question.format === "open" ? (
         <div className="space-y-2">
           <textarea
             value={text}
@@ -890,7 +834,7 @@ export default function QuestionScreen() {
           เดิมกดจบแล้วเด้งไปให้คนกดดาว ซึ่งใช้ไม่ได้เวลาเล่นคนเดียว
           ตอนนี้ให้พิมพ์คำตอบแล้ว AI ตรวจตามเกณฑ์เหมือนข้ออัตนัย
           ส่วนเสียงที่อัดไว้เอาไปให้โค้ชฟังเป็นฟีดแบ็กเพิ่ม ไม่ใช่ตัวให้คะแนน */}
-      {phase === "performing" && !isBotTurn ? (
+      {phase === "performing" ? (
         <div className="space-y-2">
           <div className="panel space-y-2 p-4 text-center">
             {micWorks ? (
@@ -949,16 +893,6 @@ export default function QuestionScreen() {
               {gradeSecs} วินาที{gradeSecs >= 12 ? " · ช้ากว่าปกติ กำลังลองใหม่ให้" : ""}
             </p>
           ) : null}
-        </div>
-      ) : null}
-
-      {/* ── หมดเวลาโดยไม่มีใครกดชิงตอบ ──────────────────────────────────── */}
-      {phase === "result" && noBuzz ? (
-        <div className="animate-popIn rounded-2xl border border-stage-edge bg-white/[0.03] p-5 text-center">
-          <p className="text-sm font-bold text-white">หมดเวลา — ไม่มีใครกดชิงตอบ</p>
-          <p className="mt-1 text-xs text-slate-400">
-            ข้อนี้ผ่านไปโดยไม่มีใครได้คะแนนและไม่มีใครเสียคะแนน
-          </p>
         </div>
       ) : null}
 
@@ -1102,6 +1036,36 @@ export default function QuestionScreen() {
             </div>
           </div>
 
+          {/* ── บอทเจอโจทย์ข้อเดียวกันและตอบไปแล้ว ──────────────────────────
+              ต้องโชว์ทุกข้อ ไม่ใช่โชว์เฉพาะข้อที่บอทผลัดมาตอบ ไม่งั้นคนจะไม่รู้ว่า
+              คะแนนบอทที่ขึ้นบนแถบด้านบนโตขึ้นมาจากไหน */}
+          {botResult ? (
+            <div className="rounded-2xl border border-stage-edge bg-white/[0.03] p-4">
+              <p className="text-sm font-bold text-slate-200">
+                🤖 {botResult.name} เจอโจทย์ข้อเดียวกัน
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                {botResult.remark}
+              </p>
+              <div className="mt-2 flex items-baseline gap-3">
+                <span
+                  className={`tabular text-xl font-extrabold ${
+                    botResult.points > 0 ? "text-teal-300" : "text-slate-400"
+                  }`}
+                >
+                  +{botResult.points}
+                </span>
+                <span className="text-xs text-slate-500">
+                  (คุณภาพคำตอบ {botResult.quality}%
+                  {botResult.boxesOpened > 0
+                    ? ` · เปิด ${botResult.boxesOpened} กล่อง`
+                    : " · ไม่เปิดกล่อง"}
+                  )
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           {/* เฉลยกล่องทั้ง 4 */}
           {revealed ? <RevealList items={revealed} openedIds={openedIds} /> : null}
 
@@ -1112,19 +1076,14 @@ export default function QuestionScreen() {
           ต้องเป็นลูกคนสุดท้ายของกล่องนอกสุด ไม่ใช่ซ่อนอยู่ในบล็อกย่อย
           เพราะ sticky ยึดกับ "กล่องแม่" ถ้าแม่เตี้ยกว่าจอ มันก็ไม่มีที่ให้ติด
           (ลองวางไว้ในบล็อกอัตนัยก่อนแล้ววัดได้ y=607 บนจอสูง 375 คือไม่ติดเลย) */}
-      {/* ช่วงผลลัพธ์ต้องมีปุ่มไปข้อถัดไปเสมอ ไม่ว่าใครเป็นคนตอบ
-          เดิมซ่อนทั้งแถบเมื่อเป็นตาบอท ซึ่งตอนผลัดกันตอบไม่มีปัญหาเพราะบอท
-          ไม่เคยเป็นคนสุดท้ายที่ค้างอยู่หน้าผล แต่พอเปลี่ยนเป็นชิงกดตอบ
-          บอทชนะการชิงได้ทุกข้อ แล้วเกมจะค้างเพราะไม่มีปุ่มให้กดต่อ */}
-      {!isBotTurn || phase === "result" ? (
-        <ActionBar
-          counter={
-            (phase === "answering" && question.format === "open") ||
-            (phase === "performing" && !micWorks)
-              ? `${text.length}/1200`
-              : ""
-          }
-        >
+      <ActionBar
+        counter={
+          (phase === "answering" && question.format === "open") ||
+          (phase === "performing" && !micWorks)
+            ? `${text.length}/1200`
+            : ""
+        }
+      >
           {phase === "answering" && question.format === "open" ? (
             <>
               <MicButton onAppend={appendSpoken} onInterim={setInterim} />
@@ -1158,8 +1117,7 @@ export default function QuestionScreen() {
               {isLast ? "ดูสรุปผล" : "ข้อถัดไป"}
             </button>
           ) : null}
-        </ActionBar>
-      ) : null}
+      </ActionBar>
     </div>
   );
 }

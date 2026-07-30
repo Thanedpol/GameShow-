@@ -218,7 +218,14 @@ export default function SetupScreen() {
       </header>
 
       {/* เล่นข้ามเครื่อง — วางไว้บนสุดเพราะต้องเปิดห้องก่อนเริ่มเกม */}
-      <RoomPanel defaultName={names[0] ?? ""} />
+      <RoomPanel
+        defaultName={names[0] ?? ""}
+        onStart={() => void handleStart()}
+        starting={starting}
+        /* รวมเงื่อนไข "โหมดทีมต้องเปิดห้องก่อน" เข้าไปด้วย ไม่งั้นปุ่มในกล่องนั้น
+           จะกดได้ทั้งที่ handleStart จะ return ทิ้งเงียบ ๆ */
+        missing={needsRoom ? [...missing, "ต้องเปิดห้องก่อน (โหมดทีม)"] : missing}
+      />
 
       {/* เลือกโหมด */}
       <section className="space-y-3">
@@ -436,11 +443,23 @@ export default function SetupScreen() {
               ได้โทเคน +1 (สูงสุด {cfg.maxTokens}) ใช้เปิดกล่องฟรี 1 กล่อง
             </span>
           </li>
+          {/* เคยเขียนว่า "ตอบผิดแล้วอีกฝ่ายแย่งตอบได้" ซึ่งไม่จริงแล้ว —
+              กติกาแย่งตอบถูกตัดออกไปนานแล้ว การบอกกติกาที่ไม่มีอยู่จริงทำให้ผู้เล่น
+              รอจังหวะที่ไม่มีวันมาถึง แล้วสรุปว่าเกมพัง */}
           <li className="flex gap-2">
             <span className="text-indigo-300">▸</span>
             <span>
-              ตอบผิดแล้วยังมีเวลาเหลือ อีกฝ่าย{" "}
-              <b className="text-white">แย่งตอบ</b> ได้ในเวลาที่เหลือของข้อนั้น
+              {mode === "bot" ? (
+                <>
+                  ทุกข้อ <b className="text-white">คุณตอบก่อน แล้วบอทตอบข้อเดียวกัน</b> —
+                  เจอโจทย์ชุดเดียวกันครบทั้งเกม คะแนนจึงเทียบกันได้จริง
+                </>
+              ) : (
+                <>
+                  ขึ้นข้อมา <b className="text-white">ตอบได้เลย</b> ไม่ต้องกดชิงสิทธิ์ก่อน ·
+                  หลายคนก็ <b className="text-white">ผลัดกันตอบ</b> ไปตามลำดับข้อ
+                </>
+              )}
             </span>
           </li>
         </ul>

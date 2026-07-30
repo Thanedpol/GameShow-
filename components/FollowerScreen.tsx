@@ -145,7 +145,7 @@ export default function FollowerScreen() {
   // ── กำลังเล่น ────────────────────────────────────────────────────────────
   // กล่องของข้อก่อนหน้าอาจค้างมาชั่วครู่ระหว่างที่เจ้าภาพยังไม่ส่งชุดใหม่
   const liveMatches = !live?.questionId || live.questionId === question.id;
-  const step = liveMatches ? (live?.step ?? "buzzing") : "buzzing";
+  const step = liveMatches ? (live?.step ?? "answering") : "answering";
   const cfg = snapshot.settings;
   const stageMs = (live?.durationMs ?? cfg.seconds[question.stage] * 1000) || 60_000;
   const remaining =
@@ -158,7 +158,23 @@ export default function FollowerScreen() {
       ? live.boxes.map((b) => ({ id: b.id, label: b.label, text: b.text, zone: b.zone }))
       : null;
   const openedCount = live?.openedCount ?? boxes?.filter((b) => b.text !== null).length ?? 0;
-  const round = snapshot.roundLog.find((r) => r.questionId === question.id);
+  /**
+   * ผลของ "คนที่ตอบข้อนี้" ไม่ใช่ผลแรกที่เจอ
+   *
+   * โหมดดวลบอทมีสองรายการต่อข้อ (ของคนกับของบอท) ถ้าหยิบอันแรกเฉย ๆ
+   * จะเจอของใครก็ได้ตามลำดับที่บันทึกลงไป — ต้องยึดจากคนที่ถึงตาตอบ
+   */
+  const round = snapshot.roundLog.find(
+    (r) =>
+      r.questionId === question.id &&
+      (!live?.activeParticipantId || r.participantId === live.activeParticipantId),
+  );
+  const botRound = snapshot.roundLog.find(
+    (r) =>
+      r.questionId === question.id &&
+      r.participantId !== round?.participantId &&
+      snapshot.participants.find((p) => p.id === r.participantId)?.kind === "bot",
+  );
 
   return (
     <div className="space-y-4">
@@ -172,10 +188,10 @@ export default function FollowerScreen() {
         question={question}
         index={snapshot.currentQuestionIndex}
         total={snapshot.questions.length}
-        activeLine={activeName ? `${activeName} ได้สิทธิ์ตอบ` : "ทุกคนแข่งกันกดชิงตอบ"}
+        activeLine={activeName ? `${activeName} ตอบข้อนี้` : "—"}
         remaining={remaining}
         totalMs={stageMs}
-        timerLabel={step === "buzzing" ? "ชิงกดตอบ" : "เวลาที่เหลือ"}
+        timerLabel="เวลาที่เหลือ"
         paused={step === "grading" || step === "result"}
       />
 
@@ -218,31 +234,6 @@ export default function FollowerScreen() {
           <LiveDrafts questionId={question.id} onUse={useDraftText} />
           <TeammateNotes questionId={question.id} />
         </div>
-      ) : null}
-
-      {/* ── ชิงกดตอบ — วางตำแหน่งเดียวกับจอเจ้าภาพ ปุ่มอยู่ที่อีกเครื่อง ── */}
-      {step === "buzzing" ? (
-        <section className="panel space-y-3 p-4">
-          <div className="text-center">
-            <p className="text-sm font-bold text-white">ใครตอบข้อนี้ได้ กดชิงเลย</p>
-            <p className="mt-0.5 text-xs text-slate-400">
-              ทุกคนเจอโจทย์เดียวกัน · ปุ่มชิงตอบอยู่ที่จอเจ้าภาพ
-            </p>
-          </div>
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            {snapshot.participants.map((p) => (
-              <div
-                key={p.id}
-                aria-disabled="true"
-                className="rounded-2xl border-2 border-sky-400/50 bg-sky-500/15 px-4 py-5
-                           text-center text-base font-extrabold text-white opacity-60"
-              >
-                {p.kind === "bot" ? "🤖 " : ""}
-                {p.name}
-              </div>
-            ))}
-          </div>
-        </section>
       ) : null}
 
       {/* ── ปรนัย — เห็นตัวเลือกชุดเดียวกัน แต่กดไม่ได้ ─────────────────── */}
@@ -342,6 +333,32 @@ export default function FollowerScreen() {
           <p className="mt-3 text-xs text-slate-500">
             ปุ่มไปข้อถัดไปอยู่ที่จอเจ้าภาพ
           </p>
+        </div>
+      ) : null}
+
+      {/* บอทเจอโจทย์ข้อเดียวกันและตอบไปแล้ว — โชว์ให้ตรงกับจอเจ้าภาพ */}
+      {step === "result" && botRound ? (
+        <div className="rounded-2xl border border-stage-edge bg-white/[0.03] p-4">
+          <p className="text-sm font-bold text-slate-200">
+            🤖 {snapshot.participants.find((p) => p.id === botRound.participantId)?.name}{" "}
+            เจอโจทย์ข้อเดียวกัน
+          </p>
+          <div className="mt-2 flex items-baseline gap-3">
+            <span
+              className={`tabular text-xl font-extrabold ${
+                botRound.points > 0 ? "text-teal-300" : "text-slate-400"
+              }`}
+            >
+              +{botRound.points}
+            </span>
+            <span className="text-xs text-slate-500">
+              (คุณภาพคำตอบ {botRound.quality}%
+              {botRound.boxesOpened > 0
+                ? ` · เปิด ${botRound.boxesOpened} กล่อง`
+                : " · ไม่เปิดกล่อง"}
+              )
+            </span>
+          </div>
         </div>
       ) : null}
 

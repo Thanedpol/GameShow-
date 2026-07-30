@@ -95,7 +95,58 @@ function MemoryNotice() {
   );
 }
 
-export default function RoomPanel({ defaultName }: { defaultName: string }) {
+/**
+ * ปุ่มเริ่มเกมที่อยู่ในกล่องนี้เลย ไม่ต้องเลื่อนลงไปหาปุ่มล่างสุด
+ *
+ * ผู้ใช้รายงานว่าเปิดห้อง ชวนเพื่อนเข้ามาแล้ว แต่ปุ่มเริ่มอยู่ท้ายหน้าตั้งค่า
+ * ซึ่งเป็นคนละที่กับตรงที่เพิ่งทำงานเสร็จ — บนแท็บเล็ตต้องเลื่อนผ่านการ์ดเลือกโหมด
+ * ช่องกรอกชื่อ และตารางกติกาทั้งหมดกว่าจะเจอ จนดูเหมือนว่าเล่นข้ามเครื่องแล้ว
+ * เริ่มเกมไม่ได้ · ปุ่มนี้เรียกตัวเดียวกับปุ่มล่างสุด ไม่ได้แยกเส้นทางเริ่มเกมใหม่
+ *
+ * `missing` มาจากหน้าตั้งค่า ใช้บอกว่ายังขาดช่องไหน — ถ้าไม่บอก ผู้ใช้จะเจอ
+ * ปุ่มที่กดไม่ได้โดยไม่รู้ว่าทำไม ซึ่งเป็นปัญหาเดิมที่เพิ่งแก้ไปกับปุ่มล่างสุด
+ */
+function StartHere({
+  onStart,
+  starting,
+  missing,
+  label,
+}: {
+  onStart: () => void;
+  starting: boolean;
+  missing: string[];
+  label: string;
+}) {
+  return (
+    <div className="space-y-1.5 border-t border-white/10 pt-3">
+      <button
+        onClick={onStart}
+        disabled={starting || missing.length > 0}
+        className="btn-primary w-full text-sm"
+      >
+        {starting ? "กำลังเตรียมคำถาม..." : label}
+      </button>
+      {missing.length > 0 ? (
+        <p className="text-center text-xs text-amber-200/90">
+          ยังไม่ได้กรอก: {missing.join(" · ")} — เลื่อนลงไปกรอกให้ครบก่อน
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+export default function RoomPanel({
+  defaultName,
+  onStart,
+  starting = false,
+  missing = [],
+}: {
+  defaultName: string;
+  /** ไม่ส่งมา = จอที่เริ่มเกมเองไม่ได้ (จอผู้ติดตาม) จะไม่มีปุ่มเริ่มเกม */
+  onStart?: () => void;
+  starting?: boolean;
+  missing?: string[];
+}) {
   const {
     session,
     members,
@@ -198,6 +249,15 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
             {error}
           </p>
         ) : null}
+
+        {onStart ? (
+          <StartHere
+            onStart={onStart}
+            starting={starting}
+            missing={missing}
+            label="เริ่มเกมบนเครื่องนี้เครื่องเดียว"
+          />
+        ) : null}
       </section>
     );
   }
@@ -280,6 +340,16 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
         <p className="rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
           {error}
         </p>
+      ) : null}
+
+      {/* เจ้าภาพเท่านั้นที่กดเริ่มได้ ผู้ติดตามกดไม่ได้อยู่แล้วเพราะไม่ได้ถือสถานะเกม */}
+      {onStart && isHost ? (
+        <StartHere
+          onStart={onStart}
+          starting={starting}
+          missing={missing}
+          label={`เริ่มเกม — ทุกคนในห้องจะตามจอนี้ (${members.length} เครื่อง)`}
+        />
       ) : null}
     </section>
   );
