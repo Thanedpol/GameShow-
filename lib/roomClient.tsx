@@ -263,6 +263,30 @@ export function RoomProvider({ children }: { children: ReactNode }) {
         setRoom(view);
         setError(null);
 
+        /**
+         * เจ้าภาพเช็กว่าของบนห้องตรงกับที่ตัวเองถืออยู่ไหม ไม่ตรงก็ส่งใหม่
+         *
+         * ตัวกันส่งซ้ำ (lastSyncRef) มีไว้ไม่ให้ยิงเครือข่ายทุก render ซึ่งจำเป็น
+         * แต่แลกมากับข้อเสียว่า "ส่งไปแล้วถือว่าถึงแน่นอน" ซึ่งไม่จริงเสมอไป —
+         * เขียนพลาด สลับ instance หรือโดนคำขออื่นเขียนทับ ก็ทำให้ของหายได้
+         * แล้วผู้ติดตามจะค้างอยู่หน้าเดิมตลอดกาลเพราะไม่มีใครส่งซ้ำให้อีก
+         *
+         * เทียบแค่ช่วงเกมกับข้อที่เล่นอยู่ก็พอ ไม่ต้องเทียบทั้งก้อน
+         * (เทียบทั้งก้อนจะไม่มีวันตรง เพราะ view ผ่าน JSON มาแล้วคนละ reference)
+         */
+        if (session.role === "host" && snapshotRef.current) {
+          const mine = snapshotRef.current;
+          const theirs = view.snapshot;
+          if (
+            !theirs ||
+            theirs.phase !== mine.phase ||
+            theirs.currentQuestionIndex !== mine.currentQuestionIndex
+          ) {
+            lastSyncRef.current = "";
+            void hostSync(session, { snapshot: mine });
+          }
+        }
+
         // ห้องกลับมาแล้วแต่ไม่มีชื่อเราอยู่ในนั้น — เกิดตอนเจ้าภาพรีเฟรชหน้าไปพร้อมกับ
         // ที่เซิร์ฟเวอร์ลืมห้อง เจ้าภาพจึงปลุกคืนได้แค่ตัวเอง ขอที่นั่งคืนเงียบ ๆ
         // ดีกว่าปล่อยให้ผู้ติดตามนั่งดูห้องที่ตัวเองส่งอะไรเข้าไปไม่ได้

@@ -114,6 +114,8 @@ interface MemoryEntry {
   intents: RoomIntent[];
   /** memberId → draft — เก็บเป็น map เพราะแต่ละคนมี draft ได้อันเดียว */
   drafts: Map<string, RoomDraft>;
+  /** memberId → เวลาที่เห็นล่าสุด (epoch ms) */
+  seen: Map<string, number>;
   expiresAt: number;
 }
 
@@ -156,6 +158,89 @@ const intentKey = (code: string) => `baijing:room:${code}:intents`;
  */
 const draftKey = (code: string) => `baijing:room:${code}:drafts`;
 
+/**
+ * เวลาที่เห็นแต่ละคนล่าสุด — แยก key ด้วยเหตุผลเดียวกับ intents/drafts
+ * แต่รอบนี้เป็นบั๊กที่กัดจริงในโปรดักชัน ไม่ใช่การกันไว้ก่อน
+ *
+ * เดิมการ poll ของผู้ติดตามต่ออายุ lastSeen ด้วยการ "อ่านห้องทั้งก้อนมาแก้แล้วเขียนทับ"
+ * บนหน่วยความจำไม่มีปัญหาเพราะทุกคนถืออ็อบเจ็กต์ก้อนเดียวกัน การแก้จึงเห็นพร้อมกันหมด
+ * แต่บน Redis ทุกคนได้สำเนาที่ parse ใหม่ของตัวเอง ลำดับนี้จึงเกิดขึ้นได้:
+ *
+ *   1. ผู้ติดตาม GET ห้อง (ยังไม่มีสแนปช็อต)
+ *   2. เจ้าภาพกดเริ่มเกม → เขียนสแนปช็อตลงห้อง
+ *   3. ผู้ติดตามเขียนสำเนาจากข้อ 1 กลับไป → สแนปช็อตหายกลับเป็น null
+ *
+ * ผลคือผู้ติดตามค้างอยู่ที่ "รอเจ้าภาพเริ่มเกม" ตลอดกาล เพราะเจ้าภาพมีตัวกัน
+ * ส่งซ้ำ (lastSyncRef) จึงไม่ส่งใหม่ให้อีกเลย ทั้งที่สถานะในเครื่องถูกต้องอยู่
+ *
+ * แยกมาไว้ที่นี่แล้ว การ poll ของผู้ติดตามไม่แตะ RoomRecord อีกเลย
+ * เหลือคนเขียนห้องแค่เจ้าภาพ (sync/clear) กับตอนเข้า/ออกห้องเท่านั้น
+ */
+const seenKey = (code: string) => `baijing:room:${code}:seen`;
+
+/**
+ * บอกว่ายังอยู่ — เขียนช่องของตัวเองช่องเดียว ไม่แตะของใคร
+ *
+ * เขียนถี่แค่ไหนก็ไม่ทับสแนปช็อต เพราะอยู่คนละ key กับ RoomRecord แล้ว
+ */
+export async function touchSeen(code: string, memberId: string, at: number): Promise<void> {
+  if (roomBackend() === "memory") {
+    const entry = readMemory(code);
+    if (!entry) return;
+    entry.seen.set(memberId, at);
+    touchMemory(entry);
+    return;
+  }
+  await redis(["HSET", seenKey(code), memberId, String(at)]);
+  await redis(["EXPIRE", seenKey(code), TTL_SECONDS]);
+}
+
+/** memberId → epoch ms ที่เห็นล่าสุด */
+export async function listSeen(code: string): Promise<Record<string, number>> {
+  if (roomBackend() === "memory") {
+    return Object.fromEntries(readMemory(code)?.seen ?? []);
+  }
+
+  // HGETALL ของ Upstash REST คืนอาร์เรย์แบน [field, value, ...] ไม่ใช่ object
+  const raw = await redis<string[] | null>(["HGETALL", seenKey(code)]);
+  const out: Record<string, number> = {};
+  for (let i = 0; raw && i + 1 < raw.length; i += 2) {
+    const at = Number(raw[i + 1]);
+    if (Number.isFinite(at)) out[raw[i]] = at;
+  }
+  return out;
+}
+
+/**
+ * ตัวนับที่หมดอายุเอง — ใช้ทำ rate limit ให้ทำงานข้าม instance ได้
+ *
+ * บน Vercel แต่ละคำขออาจไปคนละเครื่อง ถ้านับในหน่วยความจำของ process
+ * คนยิงถล่มจะได้โควตาใหม่ทุกครั้งที่ไปโดนเครื่องอื่น = เท่ากับไม่ได้กันอะไรเลย
+ * นับไว้ที่ Redis จึงเป็นตัวเลขก้อนเดียวที่ทุกเครื่องเห็นตรงกัน
+ *
+ * INCR แล้วค่อย EXPIRE เฉพาะครั้งแรกของหน้าต่างเวลา — ครั้งต่อ ๆ ไปเสียคำสั่งเดียว
+ * ตอนไม่ได้ต่อ Redis จะนับในหน่วยความจำแทน ซึ่งพอใช้ตอน dev ในเครื่องเดียว
+ */
+const counters = new Map<string, { count: number; resetAt: number }>();
+
+export async function bumpCounter(key: string, windowSeconds: number): Promise<number> {
+  if (roomBackend() === "memory") {
+    const now = Date.now();
+    const entry = counters.get(key);
+    if (!entry || now > entry.resetAt) {
+      counters.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
+      return 1;
+    }
+    entry.count += 1;
+    return entry.count;
+  }
+
+  const full = `baijing:rate:${key}`;
+  const count = await redis<number>(["INCR", full]);
+  if (count === 1) await redis(["EXPIRE", full, windowSeconds]);
+  return count;
+}
+
 export async function getRoom(code: string): Promise<RoomRecord | null> {
   if (roomBackend() === "memory") return readMemory(code)?.room ?? null;
 
@@ -177,6 +262,7 @@ export async function saveRoom(room: RoomRecord): Promise<void> {
         room,
         intents: existing?.intents ?? [],
         drafts: existing?.drafts ?? new Map(),
+        seen: existing?.seen ?? new Map(),
         expiresAt: Date.now() + TTL_SECONDS * 1000,
       }),
     );
@@ -202,6 +288,7 @@ export async function restoreRoom(room: RoomRecord): Promise<boolean> {
       room,
       intents: [],
       drafts: new Map(),
+      seen: new Map(),
       expiresAt: Date.now() + TTL_SECONDS * 1000,
     });
     return true;

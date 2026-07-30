@@ -22,11 +22,13 @@ import {
   getRoom,
   listDrafts,
   listIntents,
+  listSeen,
   pushIntent,
   saveDraft,
   restoreRoom,
   roomBackend,
   saveRoom,
+  touchSeen,
 } from "@/lib/roomStore";
 import type { GameState } from "@/lib/types";
 
@@ -72,7 +74,7 @@ async function buildView(room: RoomRecord, withDrafts = false): Promise<RoomView
   const now = Date.now();
   return {
     ...rest,
-    members: activeMembers(room.members, now),
+    members: activeMembers(await freshenSeen(room), now),
     intents: await listIntents(room.code),
     drafts: withDrafts
       ? (await listDrafts(room.code)).filter((d) => now - d.at < DRAFT_STALE_MS)
@@ -81,16 +83,18 @@ async function buildView(room: RoomRecord, withDrafts = false): Promise<RoomView
   };
 }
 
-/** ต่ออายุ lastSeen ของสมาชิก แล้วบอกว่ามีอะไรเปลี่ยนพอที่จะต้องเขียนกลับไหม */
-function touchMember(room: RoomRecord, memberId: string | null): boolean {
-  if (!memberId) return false;
-  const member = room.members.find((m) => m.id === memberId);
-  if (!member) return false;
-  const now = Date.now();
-  // เขียนกลับเฉพาะตอนที่ห่างพอสมควร ไม่งั้นทุก ๆ การ poll จะยิงเขียน Redis
-  if (now - member.lastSeen < 5_000) return false;
-  member.lastSeen = now;
-  return true;
+/**
+ * เอาเวลาที่เห็นล่าสุดจาก key แยก มาทับค่าใน RoomRecord
+ *
+ * ค่าใน record เป็นแค่ค่าตอนเข้าห้อง ไม่ได้ถูกอัปเดตอีกเลย เพราะการ poll
+ * ไม่เขียน record แล้ว (ดู seenKey ใน lib/roomStore.ts ว่าทำไมถึงต้องแยก)
+ * ตัวจริงที่บอกว่าใครยังอยู่คือ hash ตัวนั้น จึงต้องรวมก่อนใช้งานทุกครั้ง
+ */
+async function freshenSeen(room: RoomRecord): Promise<RoomMember[]> {
+  const seen = await listSeen(room.code);
+  return room.members.map((m) =>
+    seen[m.id] && seen[m.id] > m.lastSeen ? { ...m, lastSeen: seen[m.id] } : m,
+  );
 }
 
 export async function GET(request: NextRequest, { params }: Params) {
@@ -100,8 +104,14 @@ export async function GET(request: NextRequest, { params }: Params) {
   const room = await getRoom(code);
   if (!room) return notFound();
 
-  if (touchMember(room, request.nextUrl.searchParams.get("memberId"))) {
-    await saveRoom(room);
+  /*
+    บอกว่ายังอยู่ผ่าน key แยก ห้ามเขียน RoomRecord กลับไปจากตรงนี้เด็ดขาด
+    ของเดิมเขียนกลับทั้งก้อน แล้วสำเนาเก่าของผู้ติดตามไปทับสแนปช็อตที่เจ้าภาพ
+    เพิ่งเขียน จนผู้ติดตามค้างอยู่หน้า "รอเจ้าภาพเริ่มเกม" ตลอดกาล
+  */
+  const memberId = request.nextUrl.searchParams.get("memberId");
+  if (memberId && room.members.some((m) => m.id === memberId)) {
+    await touchSeen(code, memberId, Date.now());
   }
   const withDrafts = request.nextUrl.searchParams.get("drafts") === "1";
   return NextResponse.json(await buildView(room, withDrafts), noStore);
@@ -224,7 +234,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       }
 
       // เก็บเฉพาะคนที่ยังอยู่ กันรายชื่อบวมจากคนที่ปิดแท็บไปนานแล้ว
-      room.members = retainedMembers(room.members, now);
+      // ต้องรวมเวลาจาก key แยกก่อน ไม่งั้นจะตัดคนที่ยัง poll อยู่ทิ้ง
+      room.members = retainedMembers(await freshenSeen(room), now);
       room.updatedAt = now;
       room.version += 1;
       await saveRoom(room);
@@ -244,7 +255,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       if ("live" in body) room.live = (body.live as RoomLive | null) ?? null;
       // ตัดเฉพาะคนที่หายไปนานจริง ๆ — ห้ามใช้เกณฑ์ "ออนไลน์" ตรงนี้
       // ไม่งั้นเจ้าภาพที่ sync ถี่ ๆ จะเตะเพื่อนที่แท็บโดนหน่วงออกจากห้อง
-      room.members = retainedMembers(room.members, now);
+      // ต้องรวมเวลาจาก key แยกก่อน ไม่งั้นจะตัดคนที่ยัง poll อยู่ทิ้ง
+      room.members = retainedMembers(await freshenSeen(room), now);
       const host = room.members.find((m) => m.id === room.hostId);
       if (host) host.lastSeen = now;
       room.updatedAt = now;
@@ -274,10 +286,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       };
       await pushIntent(code, intent);
 
-      member.lastSeen = now;
-      room.updatedAt = now;
-      room.version += 1;
-      await saveRoom(room);
+      // ตัวข้อเสนออยู่คนละ key อยู่แล้ว เหลือแค่บอกว่ายังอยู่ ซึ่งก็แยก key เหมือนกัน
+      // ห้ามเขียน RoomRecord จากฝั่งผู้ติดตาม ด้วยเหตุผลเดียวกับใน GET
+      await touchSeen(code, member.id, now);
       return NextResponse.json({ ok: true }, noStore);
     }
 
