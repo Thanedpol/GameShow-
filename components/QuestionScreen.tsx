@@ -1,13 +1,23 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ScoreBoard from "./ScoreBoard";
 import TeammateNotes from "./TeammateNotes";
-import TimerRing from "./TimerRing";
+import {
+  ActionBar,
+  HintBoxBody,
+  HintGrid,
+  LiveDrafts,
+  OpenedHints,
+  QuestionMeta,
+  QuestionPanel,
+  RevealList,
+  type StageBox,
+} from "./StageView";
 import { useGame } from "@/lib/gameStore";
 import { useRoom } from "@/lib/roomClient";
 import { botRemark, planBotTurn, type BotTurn } from "@/lib/bot";
-import { STAGE_LABEL, hintMultiplier } from "@/lib/scoring";
+import { hintMultiplier } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
 import { takeHints, warmHints } from "@/lib/hintPrefetch";
 import { shrinkImage } from "@/lib/shrinkImage";
@@ -17,7 +27,6 @@ import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
 import type { VoiceCritique } from "@/lib/voiceCoach";
 import type { CritiqueApiResponse } from "@/app/api/critique/route";
 import type { TranscribeApiResponse } from "@/app/api/transcribe/route";
-import { ZONE_POSITION } from "@/lib/types";
 import type {
   GradeApiResponse,
   HintApiResponse,
@@ -44,37 +53,6 @@ type Local =
   | "performing"
   | "grading"
   | "result";
-
-/**
- * เนื้อในกล่องคำใบ้ — เป็นข้อความเปล่า หรือข้อความ + ภาพซูมเฉพาะโซน
- *
- * กล่องภาพไม่ได้วาดภาพใหม่ แต่ซูมเข้าไปที่โซนหนึ่งของภาพประกอบคำถาม
- * ประหยัดทั้งเงิน (ภาพละราว 2.4 บาท) และเวลา (อีกภาพละ 5 วินาที)
- * โดยยังได้คำใบ้เชิงภาพจริง ๆ — กล่องจริงชี้ถูกโซน กล่องหลอกชี้ผิดโซน
- */
-function HintBoxBody({ box, imageUrl }: { box: HintBox; imageUrl?: string }) {
-  return (
-    <>
-      <p className="mt-1.5 text-xs leading-relaxed text-white">{box.text}</p>
-      {box.zone && imageUrl ? (
-        <div className="mt-2">
-          <div className="h-24 w-full overflow-hidden rounded-lg border border-white/15">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={imageUrl}
-              alt={`ซูมภาพโซน${box.zone}`}
-              style={{ objectPosition: ZONE_POSITION[box.zone] }}
-              className="h-full w-full scale-[2.2] object-cover"
-            />
-          </div>
-          <p className="mt-1 text-center text-xs text-sky-200/80">
-            🔍 ซูมโซน{box.zone}ของภาพ
-          </p>
-        </div>
-      ) : null}
-    </>
-  );
-}
 
 /**
  * ปุ่มไมค์ข้างช่องพิมพ์คำตอบ — พูดแทนพิมพ์ตอนเวลาไม่พอ
@@ -131,87 +109,6 @@ function MicButton({
         <span className="text-xs text-slate-500">พูดจบแล้วกดหยุด เดี๋ยวถอดให้</span>
       ) : null}
     </div>
-  );
-}
-
-/**
- * แถบปุ่มลงมือที่ติดขอบล่างจอ
- *
- * วัดจริงบนมือถือแนวนอน (812x375) แล้วเจอว่าปุ่ม "ส่งคำตอบ" อยู่ที่ y=769
- * แปลว่าต้องเลื่อนลง 2.3 เท่าของความสูงจอกว่าจะกดได้ ทั้งที่นาฬิกาเดินอยู่
- * ในเกมจับเวลา การทำให้ปุ่มตอบไปไม่ถึงคือการลงโทษผู้เล่นด้วยเรื่องที่ไม่ใช่ความรู้
- *
- * จึงตรึงไว้ล่างจอ พร้อมพื้นทึบและเงาบนขอบ เพื่อไม่ให้เนื้อหาที่เลื่อนผ่าน
- * ด้านหลังอ่านทะลุออกมา · เผื่อ safe-area ของมือถือที่มีแถบขีดล่างด้วย
- */
-function ActionBar({
-  counter,
-  children,
-}: {
-  counter?: string;
-  children: React.ReactNode;
-}) {
-  // ไม่มีปุ่มก็ไม่ต้องมีแถบ ไม่งั้นจะเหลือขอบเส้นลอย ๆ กินที่ล่างจอเปล่า ๆ
-  const hasAction = Array.isArray(children)
-    ? children.some(Boolean)
-    : Boolean(children);
-  if (!hasAction) return null;
-
-  return (
-    <div
-      className="sticky bottom-0 z-20 -mx-4 mt-2 border-t border-stage-edge/70
-                 bg-stage-bg/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]
-                 pt-3 backdrop-blur sm:-mx-6 sm:px-6"
-    >
-      <div className="flex items-center justify-between gap-3">
-        {counter ? (
-          <span className="shrink-0 text-xs tabular text-slate-500">{counter}</span>
-        ) : null}
-        <div className="flex flex-1 items-center justify-end gap-2">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * ข้อความที่เพื่อนร่วมทีมกำลังพิมพ์อยู่ตอนนี้ พร้อมปุ่มดึงมาต่อท้ายของตัวเอง
- *
- * ต่างจาก TeammateNotes ที่แสดงของที่ "ส่งแล้ว" — อันนี้คือของที่ยังพิมพ์ไม่จบ
- * มีไว้ให้เห็นว่าอีกฝ่ายเขียนถึงไหน จะได้ไม่พิมพ์เรื่องเดียวกันซ้อนกัน
- * ตามหลังจริงราว 1-2 วินาทีเพราะระบบ poll ทุก 1.5 วิ ไม่ใช่ทีละตัวอักษร
- */
-function LiveDrafts({
-  questionId,
-  onUse,
-}: {
-  questionId: string;
-  onUse: (text: string) => void;
-}) {
-  const { drafts } = useRoom();
-  const current = drafts.filter((d) => d.questionId === questionId && d.text.trim());
-  if (current.length === 0) return null;
-
-  return (
-    <section className="space-y-2 rounded-xl border border-teal-300/35 bg-teal-400/[0.07] p-3">
-      <h3 className="text-xs font-bold text-teal-200">
-        <span className="mr-1 inline-block animate-pulse">✍️</span>
-        กำลังพิมพ์อยู่ตอนนี้
-      </h3>
-      {current.map((d) => (
-        <div key={d.memberId} className="rounded-lg border border-stage-edge bg-white/[0.04] p-2.5">
-          <p className="text-xs">
-            <span className="font-semibold text-teal-200">{d.memberName}:</span>{" "}
-            <span className="text-slate-100">{d.text}</span>
-          </p>
-          <button
-            onClick={() => onUse(d.text)}
-            className="btn-ghost mt-1.5 w-full text-xs"
-          >
-            ↓ ดึงข้อความนี้มาใช้ต่อ
-          </button>
-        </div>
-      ))}
-    </section>
   );
 }
 
@@ -329,6 +226,26 @@ export default function QuestionScreen() {
   const stageSeconds = question ? cfg.seconds[question.stage] : 60;
   const maxOpen = question ? cfg.maxOpenBoxes[question.stage] : 1;
   const openLimitReached = openedIds.length >= maxOpen;
+  const remainingPct = Math.round(hintMultiplier(paidBoxes, cfg.boxCostRatio) * 100);
+
+  /**
+   * กล่องคำใบ้ในรูปแบบที่ใช้วาดจอได้ — เนื้อในจะโผล่เฉพาะกล่องที่เปิดแล้ว
+   * ก้อนเดียวกันนี้ส่งข้ามเครื่องไปให้จอเพื่อนด้วย สองจอจึงเห็นตรงกันเสมอ
+   */
+  const stageBoxes: StageBox[] | null = useMemo(
+    () =>
+      boxes
+        ? boxes.map((b) => ({
+            id: b.id,
+            label: b.label,
+            // ส่งโซนไปด้วยเสมอ ผู้ติดตามจะได้เห็นว่ากล่องไหนเป็นกล่องภาพ
+            // ส่วนเนื้อในยังปิดอยู่จนกว่าเจ้าภาพจะเปิด
+            zone: b.zone ?? null,
+            text: openedIds.includes(b.id) ? b.text : null,
+          }))
+        : null,
+    [boxes, openedIds],
+  );
 
   // ── รีเซ็ตต่อข้อ + เริ่มนาฬิกา 60 วิ (ไม่มีการหยุดพักระหว่างข้อ) ──────────
   useEffect(() => {
@@ -394,14 +311,25 @@ export default function QuestionScreen() {
       questionId: question?.id ?? null,
       imageUrl: liveImage,
       deadlineAt: timer.deadlineAt,
-      boxes: (boxes ?? []).map((b) => ({
-        id: b.id,
-        label: b.label,
-        // ส่งโซนไปด้วยเสมอ ผู้ติดตามจะได้เห็นว่ากล่องไหนเป็นกล่องภาพ
-        // ส่วนเนื้อในยังปิดอยู่จนกว่าเจ้าภาพจะเปิด
-        zone: b.zone ?? null,
-        text: openedIds.includes(b.id) ? b.text : null,
-      })),
+      // เวลาเต็มของช่วงนี้ — วงแหวนนับถอยหลังต้องรู้ ไม่งั้นวาดสัดส่วนไม่ได้
+      durationMs: stageSeconds * 1000,
+      boxes: stageBoxes ?? [],
+      openedCount: openedIds.length,
+      openedIds,
+      // เฉลยส่งไปด้วยเมื่อมีแล้ว — จอเพื่อนจะได้เห็นว่ากล่องไหนหลอก
+      reveal:
+        revealed?.map((b) => ({
+          id: b.id,
+          label: b.label,
+          text: b.text,
+          truth: b.truth,
+          rationale: b.rationale,
+        })) ?? null,
+      strengths: outcome?.strengths,
+      improvements: outcome?.improvements,
+      // คิดจากฝั่งเจ้าภาพแล้วส่งไป เพราะการใช้โทเคนเป็น state ในจอนี้เท่านั้น
+      // ถ้าให้จอเพื่อนคำนวณเองจะได้ตัวเลขไม่ตรงกันตอนมีคนกาช่องใช้โทเคน
+      remainingPct,
       activeParticipantId: active?.id ?? null,
       step: phase,
     });
@@ -411,8 +339,12 @@ export default function QuestionScreen() {
     question?.id,
     liveImage,
     timer.deadlineAt,
-    boxes,
+    stageSeconds,
+    stageBoxes,
     openedIds,
+    remainingPct,
+    revealed,
+    outcome,
     active?.id,
     phase,
   ]);
@@ -799,92 +731,27 @@ export default function QuestionScreen() {
 
   const totalQuestions = state.questions.length;
   const isLast = state.currentQuestionIndex + 1 >= totalQuestions;
-  const remainingPct = Math.round(hintMultiplier(paidBoxes, cfg.boxCostRatio) * 100);
-  const formatLabel =
-    question.format === "choice"
-      ? "ปรนัย"
-      : question.format === "open"
-        ? "อัตนัย · พิมพ์ตอบ"
-        : "โชว์ความสามารถ";
 
   return (
     <div className="space-y-4">
       <ScoreBoard activeId={active?.id ?? null} />
 
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="chip bg-indigo-500/20 text-indigo-200">
-              {STAGE_LABEL[question.stage]}
-            </span>
-            <span className="chip bg-white/10 text-slate-300">{question.category}</span>
-            <span className="chip bg-sky-500/15 text-sky-200">{formatLabel}</span>
-            <span className="chip bg-teal-400/15 text-teal-200">{question.difficulty}</span>
-            <span className="chip bg-cyan-400/15 text-cyan-100">
-              {question.pointValue} คะแนน
-            </span>
-          </div>
-          <p className="mt-2 text-xs text-slate-400">
-            ข้อ {state.currentQuestionIndex + 1} / {totalQuestions} ·{" "}
-            <span className="font-semibold text-slate-200">
-              {active ? `${active.name} ได้สิทธิ์ตอบ` : "ทุกคนแข่งกันกดชิงตอบ"}
-            </span>
-          </p>
-        </div>
-        <TimerRing
-          remaining={timer.remaining}
-          total={stageSeconds * 1000}
-          label={phase === "buzzing" ? "ชิงกดตอบ" : "เวลาที่เหลือ"}
-          paused={phase === "grading" || phase === "result"}
-        />
-      </div>
+      <QuestionMeta
+        question={question}
+        index={state.currentQuestionIndex}
+        total={totalQuestions}
+        activeLine={active ? `${active.name} ได้สิทธิ์ตอบ` : "ทุกคนแข่งกันกดชิงตอบ"}
+        remaining={timer.remaining}
+        totalMs={stageSeconds * 1000}
+        timerLabel={phase === "buzzing" ? "ชิงกดตอบ" : "เวลาที่เหลือ"}
+        paused={phase === "grading" || phase === "result"}
+      />
 
-      <div className="panel animate-popIn p-5">
-        <h2 className="text-xl font-bold leading-relaxed sm:text-2xl">{question.prompt}</h2>
-        {question.task ? (
-          <p className="mt-3 whitespace-pre-line rounded-xl bg-white/[0.05] p-3 text-sm leading-relaxed text-slate-300">
-            {question.task}
-          </p>
-        ) : null}
-        {/* โจทย์หาจุดผิดจากภาพ — ภาพคือตัวโจทย์ ไม่ใช่ของประดับ จึงวางใหญ่ไว้ตรงนี้ */}
-        {question.imageUrl ? (
-          <figure className="mt-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={question.imageUrl}
-              alt="ภาพประกอบโจทย์ — หาจุดที่ผิดในภาพนี้"
-              className="w-full rounded-xl border border-stage-edge bg-white/[0.03]"
-            />
-            <figcaption className="mt-1.5 text-center text-xs text-slate-500">
-              ภาพนี้สร้างด้วย AI และมีจุดที่ผิดอยู่ — หาให้เจอก่อนหมดเวลา
-            </figcaption>
-          </figure>
-        ) : null}
-      </div>
+      <QuestionPanel question={question} imageUrl={question.imageUrl} />
 
       {/* ── กล่องคำใบ้ 4 กล่อง ─────────────────────────────────────────── */}
       {(phase === "answering" || phase === "performing") && !isBotTurn ? (
-        <section className="space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-bold text-slate-200">
-              กล่องคำใบ้ {cfg.boxCount} กล่อง ·{" "}
-              <span className={openLimitReached ? "text-cyan-200" : ""}>
-                ช่วงนี้เปิดได้ {maxOpen} กล่อง (เปิดแล้ว {openedIds.length})
-              </span>
-            </h3>
-            <span
-              className={`chip ${
-                remainingPct === 100
-                  ? "bg-teal-400/15 text-teal-200"
-                  : remainingPct > 0
-                    ? "bg-sky-500/15 text-sky-200"
-                    : "bg-rose-500/20 text-rose-200"
-              }`}
-            >
-              เหลือ {remainingPct}% ของคะแนนข้อนี้
-            </span>
-          </div>
-
+        <div className="space-y-2">
           {active && active.tokens > 0 ? (
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100">
               <input
@@ -897,80 +764,36 @@ export default function QuestionScreen() {
             </label>
           ) : null}
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {(boxes ?? Array.from({ length: cfg.boxCount })).map((box, i) => {
-              const b = box as HintBox | undefined;
-              const opened = b ? openedIds.includes(b.id) : false;
-              if (opened && b) {
-                return (
-                  <div
-                    key={b.id}
-                    className="animate-popIn rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
-                  >
-                    <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
-                      กล่อง {b.label}
-                    </span>
-                    <HintBoxBody box={b} imageUrl={question.imageUrl} />
-                  </div>
-                );
-              }
-              return (
-                <button
-                  key={b?.id ?? i}
-                  onClick={() => b && openBox(b.id)}
-                  disabled={!b || openLimitReached}
-                  className="hint-box"
-                >
-                  <span className="text-2xl" aria-hidden="true">
-                    {!b ? "⏳" : openLimitReached ? "🔒" : "🎁"}
-                  </span>
-                  <span className="text-xs font-bold text-sky-100">
-                    {b ? `กล่อง ${b.label}` : "กำลังเตรียม"}
-                  </span>
-                  <span className="text-xs text-slate-400">
-                    {!b ? "" : openLimitReached ? "ครบโควตาแล้ว" : `−${Math.round(cfg.boxCostRatio * 100)}%`}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {hintFailed ? (
-            <p className="text-xs text-rose-300">
-              เตรียมกล่องคำใบ้ไม่สำเร็จ — ข้อนี้เล่นต่อได้โดยไม่มีคำใบ้
-            </p>
-          ) : hintSource === "fallback" && boxes ? (
-            <p className="text-xs text-cyan-200/70">
-              โหมดสำรอง — ยังต่อโมเดลไม่ได้ (เช็กที่หลังบ้าน → แท็บ API)
-            </p>
-          ) : null}
-        </section>
+          <HintGrid
+            boxes={stageBoxes}
+            boxCount={cfg.boxCount}
+            maxOpen={maxOpen}
+            openedCount={openedIds.length}
+            costPct={Math.round(cfg.boxCostRatio * 100)}
+            remainingPct={remainingPct}
+            imageUrl={question.imageUrl}
+            onOpen={openBox}
+            footer={
+              hintFailed ? (
+                <p className="text-xs text-rose-300">
+                  เตรียมกล่องคำใบ้ไม่สำเร็จ — ข้อนี้เล่นต่อได้โดยไม่มีคำใบ้
+                </p>
+              ) : hintSource === "fallback" && boxes ? (
+                <p className="text-xs text-cyan-200/70">
+                  โหมดสำรอง — ยังต่อโมเดลไม่ได้ (เช็กที่หลังบ้าน → แท็บ API)
+                </p>
+              ) : null
+            }
+          />
+        </div>
       ) : null}
 
-      {/* ── คำใบ้ที่เปิดไว้ — ค้างบนจอจนจบข้อ ──────────────────────────────
-          ผู้เล่นจ่ายคะแนนไปแล้วเพื่อเปิดกล่องนี้ ถ้ามันหายไปตอนกดตอบ
-          ก็เท่ากับจ่ายแล้วอ่านไม่ทัน ตรงนี้จึงต้องอยู่ต่อจนกว่าจะขึ้นเฉลย
-          (ตอนกำลังตอบอยู่ กริดด้านบนแสดงให้แล้ว ไม่ต้องซ้ำ) */}
-      {openedBoxes.length > 0 &&
-      phase !== "answering" &&
-      phase !== "performing" &&
-      !(phase === "result" && revealed) ? (
-        <section className="space-y-2">
-          <h3 className="text-sm font-bold text-slate-200">คำใบ้ที่เปิดไว้</h3>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {openedBoxes.map((b) => (
-              <div
-                key={b.id}
-                className="rounded-2xl border border-sky-400/50 bg-sky-500/10 p-3"
-              >
-                <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
-                  กล่อง {b.label}
-                </span>
-                <HintBoxBody box={b} imageUrl={question.imageUrl} />
-              </div>
-            ))}
-          </div>
-        </section>
+      {/* คำใบ้ที่เปิดไว้ — ค้างบนจอจนขึ้นเฉลย ดูเหตุผลที่ OpenedHints */}
+      {phase !== "answering" && phase !== "performing" && !(phase === "result" && revealed) ? (
+        <OpenedHints
+          boxes={(stageBoxes ?? []).filter((b) => b.text !== null)}
+          imageUrl={question.imageUrl}
+        />
       ) : null}
 
       {/* ── ข้อเสนอจากเพื่อนร่วมทีมที่ใช้อีกเครื่อง ─────────────────────── */}
@@ -1280,50 +1103,7 @@ export default function QuestionScreen() {
           </div>
 
           {/* เฉลยกล่องทั้ง 4 */}
-          {revealed ? (
-            <div className="panel space-y-2 p-4">
-              <h3 className="text-sm font-bold text-slate-200">
-                เฉลยกล่องคำใบ้ทั้งหมด
-              </h3>
-              {revealed.map((b) => {
-                const wasOpened = openedIds.includes(b.id);
-                return (
-                  <div
-                    key={b.id}
-                    className={`rounded-xl border p-3 ${
-                      b.truth === "จริง"
-                        ? "border-teal-300/45 bg-teal-400/[0.08]"
-                        : "border-rose-400/40 bg-rose-500/[0.06]"
-                    }`}
-                  >
-                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                      <span className="chip bg-white/10 px-2 py-0.5 text-xs text-slate-200">
-                        กล่อง {b.label}
-                      </span>
-                      <span
-                        className={`chip px-2 py-0.5 text-xs ${
-                          b.truth === "จริง"
-                            ? "bg-teal-400/25 text-teal-100"
-                            : "bg-rose-500/25 text-rose-100"
-                        }`}
-                      >
-                        {b.truth === "จริง" ? "✅ ใบ้จริง" : "🎭 ใบ้หลอก"}
-                      </span>
-                      {wasOpened ? (
-                        <span className="chip bg-sky-500/20 px-2 py-0.5 text-xs text-sky-100">
-                          คุณเปิดกล่องนี้
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="text-xs leading-relaxed text-white">{b.text}</p>
-                    <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-                      <b className="text-slate-300">ทำไมถึงใบ้แบบนี้:</b> {b.rationale}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
+          {revealed ? <RevealList items={revealed} openedIds={openedIds} /> : null}
 
         </div>
       ) : null}

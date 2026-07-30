@@ -1,6 +1,7 @@
 "use client";
 
 import { useGame } from "@/lib/gameStore";
+import type { Participant } from "@/lib/types";
 
 const ACCENTS = [
   "border-sky-400/60 bg-sky-500/15",
@@ -24,13 +25,30 @@ function TokenPips({ count, max }: { count: number; max: number }) {
   );
 }
 
-export default function ScoreBoard({ activeId = null }: { activeId?: string | null }) {
+/**
+ * แถบคะแนนด้านบนจอ
+ *
+ * `participants` / `maxTokens` ส่งมาเองได้ สำหรับจอที่ไม่ได้ถือสถานะเกมของตัวเอง
+ * (จอเพื่อนวาดจากสแนปช็อตของเจ้าภาพ ถ้าอ่าน useGame จะได้ผู้เล่นชุดว่างของเครื่องตัวเอง
+ * แล้วแถบคะแนนจะหายไปทั้งแถบ ทำให้สองจอหน้าตาไม่ตรงกัน)
+ */
+export default function ScoreBoard({
+  activeId = null,
+  participants,
+  maxTokens,
+}: {
+  activeId?: string | null;
+  participants?: Participant[];
+  maxTokens?: number;
+}) {
   const { state } = useGame();
-  const cols = state.participants.length >= 3 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2";
+  const people = participants ?? state.participants;
+  const tokenMax = maxTokens ?? state.settings.maxTokens;
+  const cols = people.length >= 3 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2";
 
   return (
     <div className={`grid gap-2 ${cols}`}>
-      {state.participants.map((p, i) => {
+      {people.map((p, i) => {
         const active = activeId === p.id;
         return (
           <div
@@ -57,7 +75,7 @@ export default function ScoreBoard({ activeId = null }: { activeId?: string | nu
               {p.score}
             </div>
             <div className="mt-1.5">
-              <TokenPips count={p.tokens} max={state.settings.maxTokens} />
+              <TokenPips count={p.tokens} max={tokenMax} />
             </div>
           </div>
         );

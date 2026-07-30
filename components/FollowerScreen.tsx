@@ -2,11 +2,21 @@
 
 import { useEffect, useState } from "react";
 import RoomPanel from "./RoomPanel";
+import ScoreBoard from "./ScoreBoard";
 import TeammateNotes from "./TeammateNotes";
+import {
+  ActionBar,
+  HintGrid,
+  LiveDrafts,
+  OpenedHints,
+  QuestionMeta,
+  QuestionPanel,
+  RevealList,
+  type StageBox,
+} from "./StageView";
 import { useRoom } from "@/lib/roomClient";
 import { MAX_INTENT_LENGTH } from "@/lib/room";
-import { ZONE_POSITION } from "@/lib/types";
-import { STAGE_LABEL, rankParticipants } from "@/lib/scoring";
+import { rankParticipants } from "@/lib/scoring";
 
 /**
  * จอของเพื่อนร่วมทีมที่ใช้อีกเครื่อง
@@ -14,6 +24,11 @@ import { STAGE_LABEL, rankParticipants } from "@/lib/scoring";
  * วาดจากสแนปช็อตที่เจ้าภาพส่งขึ้นห้อง ไม่มี state เกมของตัวเอง
  * ตั้งใจให้ "ดูได้ทุกอย่าง แต่กดตอบไม่ได้" — คนกดตอบมีคนเดียวคือเจ้าภาพ
  * จะได้ไม่เกิดกรณีสองคนกดพร้อมกันแล้วคะแนนเพี้ยน
+ *
+ * หน้าตาระหว่างเล่นใช้ชิ้นส่วนชุดเดียวกับจอเจ้าภาพทั้งหมด (ดู StageView)
+ * ผู้ใช้รายงานว่า "หน้าไม่เหมือนกันเลย" เพราะเดิมจอนี้วาดเองคนละแบบ —
+ * ได้หัวข้อเล็ก ๆ กับกล่องบอกวินาที ส่วนอีกจอได้แถบคะแนน ชิป และวงแหวน
+ * ตอนนี้ต่างกันแค่ "กดได้ไหม" ซึ่งเป็น prop ไม่ใช่หน้าจอคนละอัน
  */
 export default function FollowerScreen() {
   const { snapshot, live, sendIntent, session, drafts, sendDraft } = useRoom();
@@ -41,10 +56,6 @@ export default function FollowerScreen() {
   useEffect(() => {
     sendDraft(answering ? draft : "", question?.id ?? null);
   }, [answering, draft, question?.id, sendDraft]);
-
-  const liveDrafts = drafts.filter(
-    (d) => d.questionId === (question?.id ?? null) && d.text.trim(),
-  );
 
   /** ต่อท้ายของเดิม ไม่ทับ — ผู้เล่นอาจพิมพ์ค้างไว้แล้ว (ตรรกะเดียวกับ appendSpoken) */
   function useDraftText(text: string) {
@@ -129,195 +140,258 @@ export default function FollowerScreen() {
     );
   }
 
+  if (!question) return null;
+
   // ── กำลังเล่น ────────────────────────────────────────────────────────────
-  const secondsLeft = live?.deadlineAt
-    ? Math.max(0, Math.ceil((live.deadlineAt - now) / 1000))
-    : null;
+  // กล่องของข้อก่อนหน้าอาจค้างมาชั่วครู่ระหว่างที่เจ้าภาพยังไม่ส่งชุดใหม่
+  const liveMatches = !live?.questionId || live.questionId === question.id;
+  const step = liveMatches ? (live?.step ?? "buzzing") : "buzzing";
+  const cfg = snapshot.settings;
+  const stageMs = (live?.durationMs ?? cfg.seconds[question.stage] * 1000) || 60_000;
+  const remaining =
+    liveMatches && live?.deadlineAt ? Math.max(0, live.deadlineAt - now) : 0;
   const activeName =
     snapshot.participants.find((p) => p.id === live?.activeParticipantId)?.name ?? null;
-  const openedBoxes = (live?.boxes ?? []).filter((b) => b.text !== null);
-  // กล่องของข้อก่อนหน้าอาจค้างมาชั่วครู่ระหว่างที่เจ้าภาพยังไม่ส่งชุดใหม่
-  const liveMatchesQuestion = !live?.questionId || live.questionId === question?.id;
+
+  const boxes: StageBox[] | null =
+    liveMatches && live && live.boxes.length > 0
+      ? live.boxes.map((b) => ({ id: b.id, label: b.label, text: b.text, zone: b.zone }))
+      : null;
+  const openedCount = live?.openedCount ?? boxes?.filter((b) => b.text !== null).length ?? 0;
+  const round = snapshot.roundLog.find((r) => r.questionId === question.id);
 
   return (
-    <div className="animate-popIn space-y-4">
-      <header className="flex items-center justify-between gap-3 pt-3">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-300/80">
-            โหมดติดตาม · ห้อง {session?.code}
-          </p>
-          <p className="mt-0.5 truncate text-sm font-bold text-white">
-            {question ? STAGE_LABEL[question.stage] : "—"} · ข้อ{" "}
-            {snapshot.currentQuestionIndex + 1}/{snapshot.questions.length}
-          </p>
+    <div className="space-y-4">
+      <ScoreBoard
+        activeId={live?.activeParticipantId ?? null}
+        participants={snapshot.participants}
+        maxTokens={cfg.maxTokens}
+      />
+
+      <QuestionMeta
+        question={question}
+        index={snapshot.currentQuestionIndex}
+        total={snapshot.questions.length}
+        activeLine={activeName ? `${activeName} ได้สิทธิ์ตอบ` : "ทุกคนแข่งกันกดชิงตอบ"}
+        remaining={remaining}
+        totalMs={stageMs}
+        timerLabel={step === "buzzing" ? "ชิงกดตอบ" : "เวลาที่เหลือ"}
+        paused={step === "grading" || step === "result"}
+      />
+
+      {/* ภาพโจทย์มาทางสถานะสด ไม่ใช่ทางสแนปช็อต — ดู RoomLive.imageUrl ว่าทำไม */}
+      <QuestionPanel
+        question={question}
+        imageUrl={liveMatches ? (live?.imageUrl ?? null) : null}
+      />
+
+      {/* ── กล่องคำใบ้ — เห็นเท่ากับจอเจ้าภาพทุกกล่อง ต่างแค่กดเปิดไม่ได้ ── */}
+      {step === "answering" || step === "performing" ? (
+        <HintGrid
+          boxes={boxes}
+          boxCount={cfg.boxCount}
+          maxOpen={cfg.maxOpenBoxes[question.stage]}
+          openedCount={openedCount}
+          costPct={Math.round(cfg.boxCostRatio * 100)}
+          remainingPct={live?.remainingPct ?? 100}
+          imageUrl={liveMatches ? (live?.imageUrl ?? null) : null}
+          footer={
+            <p className="text-xs text-slate-500">
+              🔒 กดเปิดกล่องได้ที่จอเจ้าภาพ · ในกล่องมีทั้งใบ้จริงและใบ้หลอก
+              ยังไม่เฉลยจนกว่าจะจบข้อ
+            </p>
+          }
+        />
+      ) : null}
+
+      {/* คำใบ้ที่เปิดไว้ — ค้างบนจอจนขึ้นเฉลย ดูเหตุผลที่ OpenedHints */}
+      {step !== "answering" && step !== "performing" && !(step === "result" && live?.reveal) ? (
+        <OpenedHints
+          boxes={(boxes ?? []).filter((b) => b.text !== null)}
+          imageUrl={liveMatches ? (live?.imageUrl ?? null) : null}
+        />
+      ) : null}
+
+      {/* ช่วยกันคิด — วางไว้ก่อนตัวเลือก/ช่องตอบ ลำดับเดียวกับจอเจ้าภาพ */}
+      {step === "answering" || step === "performing" ? (
+        <div className="space-y-2">
+          <LiveDrafts questionId={question.id} onUse={useDraftText} />
+          <TeammateNotes questionId={question.id} />
         </div>
-        {secondsLeft !== null && liveMatchesQuestion ? (
-          <div
-            className={`shrink-0 rounded-2xl border px-4 py-2 text-center ${
-              secondsLeft <= 10
-                ? "border-rose-400/60 bg-rose-500/15"
-                : "border-stage-edge bg-white/5"
-            }`}
-          >
-            <p className="font-mono text-2xl font-extrabold text-white">{secondsLeft}</p>
-            <p className="text-xs text-slate-400">วินาที</p>
-          </div>
-        ) : null}
-      </header>
-
-      {activeName ? (
-        <p className="text-center text-xs text-slate-400">
-          ตาของ <b className="text-sky-200">{activeName}</b> · กดตอบได้ที่จอเจ้าภาพเท่านั้น
-        </p>
       ) : null}
 
-      {question ? (
+      {/* ── ชิงกดตอบ — วางตำแหน่งเดียวกับจอเจ้าภาพ ปุ่มอยู่ที่อีกเครื่อง ── */}
+      {step === "buzzing" ? (
         <section className="panel space-y-3 p-4">
-          <p className="text-base font-semibold leading-relaxed text-white">
-            {question.prompt}
-          </p>
-          {/*
-            ภาพโจทย์มาทางสถานะสด ไม่ใช่ทางสแนปช็อต — ดู RoomLive.imageUrl ว่าทำไม
-            ถ้าไม่มีภาพก็ไม่แสดงอะไร ไม่ต้องเว้นที่ว่างไว้
-          */}
-          {liveMatchesQuestion && live?.imageUrl ? (
-            <div className="overflow-hidden rounded-xl border border-white/15">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={live.imageUrl} alt="ภาพประกอบโจทย์" className="w-full" />
-            </div>
-          ) : null}
-          {question.choices?.length ? (
-            <ul className="space-y-2">
-              {question.choices.map((c) => (
-                <li
-                  key={c}
-                  className="rounded-xl border border-stage-edge bg-white/[0.04] px-4 py-3 text-sm text-slate-100"
-                >
-                  {c}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
-
-      {/* กล่องที่ทีมเปิดไปแล้ว — ข้อความจริงเห็นเหมือนกันทุกเครื่อง */}
-      {liveMatchesQuestion && (live?.boxes.length ?? 0) > 0 ? (
-        <section className="space-y-2">
-          <h2 className="text-xs font-bold text-slate-300">
-            กล่องคำใบ้ ({openedBoxes.length}/{live?.boxes.length} เปิดแล้ว)
-          </h2>
-          {/*
-            วาดครบทุกกล่องเหมือนจอเจ้าภาพ ไม่ใช่โชว์เฉพาะกล่องที่เปิดแล้ว
-            ผู้ใช้รายงานว่าจอมือถือของเพื่อน "ไม่มีขึ้นสักกล่อง" เพราะของเดิม
-            ขึ้นข้อความว่ายังไม่มีใครเปิดแทนที่จะขึ้นกล่อง ทำให้สองจอดูไม่เหมือนกัน
-            กล่องที่ยังไม่เปิดแสดงเป็นช่องทึบ เพื่อนจึงเห็นว่ามีกี่กล่องและเหลือกี่ใบ
-          */}
-          <div className="grid grid-cols-2 gap-2">
-            {(live?.boxes ?? []).map((b) => (
+          <div className="text-center">
+            <p className="text-sm font-bold text-white">ใครตอบข้อนี้ได้ กดชิงเลย</p>
+            <p className="mt-0.5 text-xs text-slate-400">
+              ทุกคนเจอโจทย์เดียวกัน · ปุ่มชิงตอบอยู่ที่จอเจ้าภาพ
+            </p>
+          </div>
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {snapshot.participants.map((p) => (
               <div
-                key={b.id}
-                className={`rounded-xl border px-3 py-2.5 ${
-                  b.text !== null
-                    ? "border-sky-400/40 bg-sky-500/10"
-                    : "border-dashed border-stage-edge bg-white/[0.02]"
-                }`}
+                key={p.id}
+                aria-disabled="true"
+                className="rounded-2xl border-2 border-sky-400/50 bg-sky-500/15 px-4 py-5
+                           text-center text-base font-extrabold text-white opacity-60"
               >
-                <p className="text-xs font-bold text-sky-300">
-                  {b.text !== null ? "" : "🎁 "}กล่อง {b.label}
-                </p>
-                {b.text !== null ? (
-                  <>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-100">{b.text}</p>
-                    {b.zone && live?.imageUrl ? (
-                      <div className="mt-2 h-20 w-full overflow-hidden rounded-lg border border-white/15">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={live.imageUrl}
-                          alt={`ซูมภาพโซน${b.zone}`}
-                          style={{ objectPosition: ZONE_POSITION[b.zone] }}
-                          className="h-full w-full scale-[2.2] object-cover"
-                        />
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-500">ยังไม่เปิด</p>
-                )}
+                {p.kind === "bot" ? "🤖 " : ""}
+                {p.name}
               </div>
             ))}
           </div>
-          <p className="text-xs text-slate-500">
-            ⚠️ ในกล่องมีทั้งใบ้จริงและใบ้หลอก ยังไม่เฉลยจนกว่าจะจบข้อ
-          </p>
         </section>
       ) : null}
 
-      <TeammateNotes questionId={question?.id ?? ""} />
-
-      {/* ข้อความที่คนอื่นกำลังพิมพ์อยู่ตอนนี้ */}
-      {liveDrafts.length > 0 ? (
-        <section className="space-y-2 rounded-xl border border-teal-300/35 bg-teal-400/[0.07] p-3">
-          <h2 className="text-xs font-bold text-teal-200">
-            <span className="mr-1 inline-block animate-pulse">✍️</span>
-            กำลังพิมพ์อยู่ตอนนี้
-          </h2>
-          {liveDrafts.map((d) => (
-            <div
-              key={d.memberId}
-              className="rounded-lg border border-stage-edge bg-white/[0.04] p-2.5"
-            >
-              <p className="text-xs">
-                <span className="font-semibold text-teal-200">{d.memberName}:</span>{" "}
-                <span className="text-slate-100">{d.text}</span>
-              </p>
-              <button onClick={() => useDraftText(d.text)} className="btn-ghost mt-1.5 w-full text-xs">
-                ↓ ดึงข้อความนี้มาใช้ต่อ
-              </button>
+      {/* ── ปรนัย — เห็นตัวเลือกชุดเดียวกัน แต่กดไม่ได้ ─────────────────── */}
+      {step === "answering" && question.format === "choice" ? (
+        <div className="grid gap-2.5">
+          {(question.choices ?? []).map((c) => (
+            <div key={c} className="choice cursor-default opacity-75">
+              {c}
             </div>
           ))}
-        </section>
+        </div>
       ) : null}
 
-      {/* ส่งความคิดให้คนที่กดตอบ */}
-      <section className="panel space-y-2 p-3">
-        <h2 className="text-xs font-bold text-white">ส่งความคิดให้เพื่อน</h2>
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value.slice(0, MAX_INTENT_LENGTH))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void handleSend();
-            }
-          }}
-          rows={2}
-          placeholder="เช่น กล่อง B น่าจะหลอก ตอบข้อ 3 เถอะ"
-          className="field resize-none text-sm"
-        />
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-slate-500">
-            {sent ? "✓ ส่งไปขึ้นจอเพื่อนแล้ว" : "Enter เพื่อส่ง · Shift+Enter ขึ้นบรรทัดใหม่"}
-          </span>
+      {/* ── กำลังตรวจ ───────────────────────────────────────────────────── */}
+      {step === "grading" ? (
+        <div className="panel flex flex-col items-center gap-3 p-8 text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/15 border-t-sky-300" />
+          <p className="text-sm text-slate-300">AI กำลังตรวจคำตอบตามเกณฑ์ของข้อนี้...</p>
+        </div>
+      ) : null}
+
+      {/* ── ผลลัพธ์ — คะแนนและฟีดแบ็กอ่านจาก roundLog ในสแนปช็อต ────────── */}
+      {step === "result" && round ? (
+        <div
+          className={`animate-popIn rounded-2xl border p-5 ${
+            round.points > 0
+              ? "border-teal-300/50 bg-teal-400/10"
+              : "border-rose-400/50 bg-rose-500/10"
+          }`}
+        >
+          <p className="text-lg font-bold">
+            {round.timedOut
+              ? `⏱️ ${activeName ?? ""} หมดเวลา`
+              : round.points > 0
+                ? `✅ ${activeName ?? ""} ได้คะแนน`
+                : `❌ ${activeName ?? ""} ไม่ได้คะแนนข้อนี้`}
+          </p>
+          {question.format === "choice" && question.correctAnswer ? (
+            <p className="mt-1 text-sm text-slate-300">
+              คำตอบที่ถูกคือ <b className="text-white">{question.correctAnswer}</b>
+            </p>
+          ) : null}
+          {round.feedback ? (
+            <p className="mt-1.5 text-sm leading-relaxed text-slate-300">{round.feedback}</p>
+          ) : null}
+          {live?.strengths?.length ? (
+            <ul className="mt-2 space-y-1 text-xs text-teal-200">
+              {live.strengths.map((s, i) => (
+                <li key={i}>✔ {s}</li>
+              ))}
+            </ul>
+          ) : null}
+          {live?.improvements?.length ? (
+            <ul className="mt-1 space-y-1 text-xs text-sky-200/80">
+              {live.improvements.map((s, i) => (
+                <li key={i}>↗ {s}</li>
+              ))}
+            </ul>
+          ) : null}
+          {question.explanation ? (
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              {question.explanation}
+            </p>
+          ) : null}
+          {question.sourceUrl ? (
+            <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              ที่มาของประเด็น:{" "}
+              <a
+                href={question.sourceUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-sky-300 underline hover:text-sky-200"
+              >
+                {question.sourceName ?? "อ่านต้นทาง"} ↗
+              </a>{" "}
+              — เฉลยเขียนโดย AI ถ้าเห็นว่าไม่ตรง ให้ยึดต้นทางเป็นหลัก
+            </p>
+          ) : null}
+          <div className="mt-3 flex items-baseline gap-3">
+            <span
+              className={`tabular text-2xl font-extrabold ${
+                round.points > 0 ? "text-teal-300" : "text-slate-400"
+              }`}
+            >
+              +{round.points}
+            </span>
+            <span className="text-xs text-slate-500">
+              (คุณภาพคำตอบ {round.quality}%
+              {round.boxesOpened > 0
+                ? ` · เปิด ${round.boxesOpened} กล่อง${
+                    round.tokenSpent ? " · ใช้โทเคน 1" : ""
+                  } → เหลือ ${live?.remainingPct ?? 100}%`
+                : ""}
+              )
+            </span>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            ปุ่มไปข้อถัดไปอยู่ที่จอเจ้าภาพ
+          </p>
+        </div>
+      ) : null}
+
+      {/* เฉลยกล่องทั้ง 4 — เพื่อนต้องได้อ่านเท่ากัน ไม่งั้นเล่นจบโดยไม่รู้ว่าโดนหลอกตรงไหน */}
+      {step === "result" && liveMatches && live?.reveal?.length ? (
+        <RevealList items={live.reveal} openedIds={live.openedIds ?? []} />
+      ) : null}
+
+      {/* ── ช่องพิมพ์ — ตำแหน่งเดียวกับช่องคำตอบของเจ้าภาพ ─────────────── */}
+      {step === "answering" || step === "performing" ? (
+        <div className="space-y-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value.slice(0, MAX_INTENT_LENGTH))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void handleSend();
+              }
+            }}
+            rows={5}
+            placeholder="ช่วยคิดแล้วส่งขึ้นจอคนตอบ... เช่น กล่อง B น่าจะหลอก ตอบข้อ 3 เถอะ"
+            className="field min-h-[130px] resize-y leading-relaxed"
+          />
+          <p className="text-xs text-slate-500">
+            {sent
+              ? "✓ ส่งไปขึ้นจอคนตอบแล้ว"
+              : "คนกดส่งคำตอบจริงคือเจ้าภาพ · จอนี้ส่งความคิดไปช่วย"}
+          </p>
+        </div>
+      ) : null}
+
+      {/* ต้องเป็นลูกคนสุดท้ายของกล่องนอกสุด ไม่งั้น sticky ไม่มีที่ให้ติด */}
+      <ActionBar
+        counter={
+          step === "answering" || step === "performing"
+            ? `${draft.length}/${MAX_INTENT_LENGTH}`
+            : ""
+        }
+      >
+        {step === "answering" || step === "performing" ? (
           <button
             onClick={() => void handleSend()}
             disabled={sending || !draft.trim()}
-            className="btn-primary shrink-0 text-xs"
+            className="btn-primary flex-1 text-base sm:flex-none sm:px-8"
           >
-            ส่ง
+            ส่งให้คนตอบ
           </button>
-        </div>
-      </section>
-
-      <section className="panel space-y-1.5 p-3">
-        <h2 className="text-xs font-bold text-slate-300">คะแนนตอนนี้</h2>
-        {snapshot.participants.map((p) => (
-          <div key={p.id} className="flex justify-between gap-3 text-xs">
-            <span className="truncate text-slate-200">{p.name}</span>
-            <span className="font-mono font-bold text-sky-200">{p.score}</span>
-          </div>
-        ))}
-      </section>
+        ) : null}
+      </ActionBar>
     </div>
   );
 }
