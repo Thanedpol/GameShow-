@@ -328,35 +328,8 @@ export default function SetupScreen() {
           ต้องการให้พร้อมเล่นเลย — การรอจึงต้องเกิดตอนที่เขายังกรอกชื่ออยู่
           ไม่ใช่ตอนที่เขาพร้อมแล้ว
         */}
-        <p
-          className={`text-center text-xs ${prepped ? "text-teal-300" : "text-slate-400"}`}
-          aria-live="polite"
-        >
-          {prepped ? (
-            <>✓ ชุดคำถามใหม่พร้อมแล้ว</>
-          ) : (
-            <>
-              <span className="mr-1 inline-block animate-pulse">●</span>
-              กำลังเตรียมชุดคำถามให้เบื้องหลัง · {waited} วินาที
-            </>
-          )}
-        </p>
-
-        <button
-          onClick={() => void handleStart()}
-          disabled={!ready || starting}
-          className="btn-primary w-full text-lg disabled:opacity-60"
-        >
-          {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
-        </button>
-        {!ready ? (
-          <p className="text-center text-xs text-amber-200/90">
-            {needsRoom
-              ? "โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่ เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้"
-              : `ปุ่มยังกดไม่ได้เพราะยังไม่ได้กรอก: ${missing.join(" · ")}`}
-          </p>
-        ) : null}
       </section>
+
 
       {/* กติกา */}
       <section className="panel space-y-3 p-5 text-sm leading-relaxed text-slate-300">
@@ -437,6 +410,52 @@ export default function SetupScreen() {
           </li>
         </ul>
       </section>
+      {/*
+        แถบเริ่มเกมตรึงไว้ล่างจอ
+
+        วัดจริงบนมือถือ (375x812) ตอนเปิดห้องแล้วมีคนเข้ามาร่วม: ปุ่มเริ่มเกม
+        อยู่ที่ y=1533px บนหน้าที่สูง 2383px แปลว่าต้องเลื่อนลงเกือบ 2 เท่าของจอ
+        กว่าจะเจอ — กล่อง "เล่นข้ามเครื่อง" ที่โผล่รหัสห้องกับรายชื่อสมาชิก
+        ดันทุกอย่างลงไป ผู้ใช้จึงรายงานว่า "ไม่มีปุ่มเริ่มเกมเลย" ทั้งที่ปุ่มมีอยู่
+
+        เป็นอาการเดียวกับปุ่ม "ส่งคำตอบ" ในหน้าเล่นเกมที่เคยแก้ด้วยวิธีนี้แล้ว
+        ต้องเป็นลูกของกล่องนอกสุด ไม่ใช่ซ่อนใน section ย่อย เพราะ sticky
+        ยึดกับกล่องแม่ ถ้าแม่เตี้ยกว่าจอมันก็ไม่มีที่ให้ติด
+      */}
+      <div
+        className="sticky bottom-0 z-30 -mx-4 border-t border-stage-edge/70
+                   bg-stage-bg/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]
+                   pt-3 backdrop-blur sm:-mx-6 sm:px-6"
+      >
+        <p
+          className={`text-center text-xs ${prepped ? "text-teal-300" : "text-slate-400"}`}
+          aria-live="polite"
+        >
+          {prepped ? (
+            <>✓ ชุดคำถามใหม่พร้อมแล้ว</>
+          ) : (
+            <>
+              <span className="mr-1 inline-block animate-pulse">●</span>
+              กำลังเตรียมชุดคำถามให้เบื้องหลัง · {waited} วินาที
+            </>
+          )}
+        </p>
+
+        <button
+          onClick={() => void handleStart()}
+          disabled={!ready || starting}
+          className="btn-primary mt-2 w-full text-lg disabled:opacity-60"
+        >
+          {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
+        </button>
+        {!ready ? (
+          <p className="mt-1.5 text-center text-xs text-amber-200/90">
+            {needsRoom
+              ? "โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่ เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้"
+              : `ปุ่มยังกดไม่ได้เพราะยังไม่ได้กรอก: ${missing.join(" · ")}`}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
