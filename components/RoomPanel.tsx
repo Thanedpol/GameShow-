@@ -10,6 +10,91 @@ import { isRoomCode, normalizeRoomCode, roomJoinUrl } from "@/lib/room";
  * เจ้าภาพ = เครื่องที่คุมเกมจริง (กดเริ่ม กดตอบ กดข้อถัดไป)
  * ผู้ติดตาม = เพื่อนร่วมทีมที่ใช้อีกเครื่อง เห็นทุกอย่างตามและส่งข้อเสนอกลับได้
  */
+/**
+ * กล่องบอกว่ายังไม่ได้ต่อที่เก็บถาวร
+ *
+ * ของเดิมเขียนว่า "ดูวิธีใน docs/DEVELOPMENT.md" ซึ่งเป็นทางตันสำหรับคนที่เปิดจาก
+ * เว็บที่ deploy แล้ว — เขาไม่มีซอร์สโค้ดอยู่ตรงหน้า จึงย้ายขั้นตอนจริงมาไว้ตรงนี้เลย
+ * และพับเก็บไว้เป็นค่าเริ่มต้นเพื่อไม่ให้บังรายชื่อสมาชิกที่คนใช้บ่อยกว่า
+ */
+function MemoryNotice() {
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function check() {
+    setChecking(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/room/health", { cache: "no-store" });
+      const data = (await res.json()) as { ok: boolean; detail: string };
+      setResult(data);
+    } catch (e) {
+      setResult({ ok: false, detail: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <details className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
+      <summary className="cursor-pointer list-none font-semibold">
+        ⚠️ ยังไม่ได้ต่อที่เก็บถาวร — กดดูวิธีทำให้เสถียร
+      </summary>
+
+      <p className="mt-2">
+        ตอนนี้ห้องเก็บอยู่ในหน่วยความจำของเซิร์ฟเวอร์ ถ้าเซิร์ฟเวอร์ลืมห้องไป
+        เครื่องเจ้าภาพจะปลุกห้องกลับมาให้เองด้วยรหัสเดิม เล่นต่อได้โดยไม่ต้องเปิดห้องใหม่
+        — แต่ถ้าบังเอิญคำขอของแต่ละเครื่องวิ่งไปคนละเครื่องเซิร์ฟเวอร์
+        ผู้ติดตามอาจค้างอยู่พักหนึ่ง ต่อ Redis แล้วปัญหานี้จะหมดไปเลย
+      </p>
+
+      <ol className="mt-2 list-decimal space-y-1 pl-4">
+        <li>
+          สมัคร{" "}
+          <a
+            href="https://upstash.com"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-link underline"
+          >
+            upstash.com
+          </a>{" "}
+          (มีแพ็กฟรี) แล้วกด Create Database เลือก region ใกล้ไทยที่สุด เช่น Singapore
+        </li>
+        <li>
+          ในหน้า database เลื่อนหาหัวข้อ <b>REST API</b> จะเจอค่าสองตัวคือ{" "}
+          <code className="rounded bg-black/30 px-1">UPSTASH_REDIS_REST_URL</code> และ{" "}
+          <code className="rounded bg-black/30 px-1">UPSTASH_REDIS_REST_TOKEN</code>
+        </li>
+        <li>
+          เอาไปใส่ที่ Vercel → โปรเจกต์นี้ → Settings → Environment Variables
+          (ถ้ารันในเครื่องให้ใส่ในไฟล์ <code className="rounded bg-black/30 px-1">.env.local</code>)
+        </li>
+        <li>
+          กด Redeploy หนึ่งครั้ง — ค่า env ใหม่จะมีผลหลัง deploy เท่านั้น ไม่ใช่ทันทีที่กดบันทึก
+        </li>
+      </ol>
+
+      <p className="mt-2 text-amber-200/80">
+        ต้องเป็นคู่ที่ขึ้นต้นด้วย <code className="rounded bg-black/30 px-1">https://</code> เท่านั้น
+        ค่าที่เป็น <code className="rounded bg-black/30 px-1">redis://…</code> ใช้กับที่นี่ไม่ได้
+      </p>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button onClick={() => void check()} disabled={checking} className="btn-ghost text-xs">
+          {checking ? "กำลังทดสอบ…" : "ทดสอบการเชื่อมต่อ"}
+        </button>
+        {result ? (
+          <span className={result.ok ? "text-teal-200" : "text-amber-200"}>
+            {result.ok ? "✓ " : "• "}
+            {result.detail}
+          </span>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 export default function RoomPanel({ defaultName }: { defaultName: string }) {
   const {
     session,
@@ -17,6 +102,7 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
     backend,
     error,
     busy,
+    reconnecting,
     isHost,
     createRoom,
     joinRoom,
@@ -180,13 +266,15 @@ export default function RoomPanel({ defaultName }: { defaultName: string }) {
         </ul>
       </div>
 
-      {backend === "memory" ? (
-        <p className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100">
-          ⚠️ เซิร์ฟเวอร์ยังเก็บห้องไว้ในหน่วยความจำ — ใช้ทดสอบในเครื่องได้ปกติ
-          แต่บนเซิร์ฟเวอร์จริงห้องจะหลุดเป็นช่วง ๆ ต้องต่อ Redis ก่อนถึงจะใช้งานจริงได้
-          (ดูวิธีใน docs/DEVELOPMENT.md)
+      {reconnecting ? (
+        <p className="rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2 text-xs leading-relaxed text-sky-100">
+          <span className="mr-1 inline-block animate-pulse">●</span>
+          หลุดจากเซิร์ฟเวอร์ชั่วคราว กำลังต่อกลับให้อัตโนมัติ…{" "}
+          {isHost ? "เครื่องนี้ถือสถานะเกมอยู่ ไม่ต้องทำอะไร" : "รอเจ้าภาพสักครู่ อย่าเพิ่งปิดแท็บ"}
         </p>
       ) : null}
+
+      {backend === "memory" ? <MemoryNotice /> : null}
 
       {error ? (
         <p className="rounded-lg border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">

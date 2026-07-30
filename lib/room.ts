@@ -89,7 +89,14 @@ export interface RoomRecord {
 
 export type RoomBackend = "redis" | "memory";
 
-export interface RoomView extends RoomRecord {
+/**
+ * สิ่งที่ส่งกลับไปให้ทุกเครื่องในห้อง — ตัด `hostId` ออกโดยตั้งใจ
+ *
+ * `hostId` ทำหน้าที่เป็นรหัสผ่านของเจ้าภาพ (ใช้ยืนยันตอน sync/clear/restore)
+ * ถ้าส่งไปกับ view ผู้ติดตามทุกคนจะอ่านได้ แล้วยิงสถานะเกมปลอมขึ้นห้องได้เลย
+ * ใครเป็นเจ้าภาพดูจาก `members[].isHost` แทนก็พอ
+ */
+export interface RoomView extends Omit<RoomRecord, "hostId"> {
   intents: RoomIntent[];
   /** สถานะที่เก็บของเซิร์ฟเวอร์ ใช้เตือนเมื่อยังไม่ได้ต่อ Redis */
   backend: RoomBackend;

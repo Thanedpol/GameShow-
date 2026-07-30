@@ -31,6 +31,16 @@ import type { GameState } from "./types";
 const SESSION_KEY = "baijing.room.session";
 const POLL_MS = 1500;
 
+/**
+ * ห้องหายไปนานแค่ไหนถึงจะยอมแพ้
+ *
+ * ตอนใช้โหมดหน่วยความจำ เซิร์ฟเวอร์ลืมห้องได้ทุกเมื่อ (รีสตาร์ท / instance ใหม่)
+ * เจ้าภาพถือสถานะจริงอยู่แล้วจึงปลุกห้องคืนได้ภายในรอบ poll เดียว (~1.5 วิ)
+ * ผู้ติดตามจึงต้องรอ ไม่ใช่โดนเตะออกทันทีที่เจอ 404 ครั้งแรกแบบเดิม
+ * ซึ่งทำให้ทั้งทีมหลุดจากห้องกลางเกมโดยที่ไม่มีใครทำอะไรผิด
+ */
+const ROOM_GRACE_MS = 30_000;
+
 export type RoomRole = "host" | "guest";
 
 interface RoomSession {
@@ -83,6 +93,8 @@ export interface RoomContextValue {
   backend: RoomBackend | null;
   error: string | null;
   busy: boolean;
+  /** เซิร์ฟเวอร์ลืมห้องอยู่ กำลังพยายามต่อกลับ — ยังไม่ถือว่าหลุดจากห้อง */
+  reconnecting: boolean;
   isHost: boolean;
   /** สแนปช็อตจากเจ้าภาพ — ฝั่งผู้ติดตามใช้อันนี้วาดจอแทน state ในเครื่องตัวเอง */
   snapshot: GameState | null;
@@ -104,40 +116,132 @@ export function RoomProvider({ children }: { children: ReactNode }) {
   const [room, setRoom] = useState<RoomView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
   // เก็บของล่าสุดที่ส่งไปแล้ว เทียบก่อนส่งรอบใหม่ จะได้ไม่ยิงซ้ำทั้งที่ไม่มีอะไรเปลี่ยน
   const lastSyncRef = useRef<string>("");
   const lastLiveRef = useRef<string>("");
 
+  // ของที่เจ้าภาพต้องใช้ตอนปลุกห้องคืน — เก็บเป็น ref ไม่ใช่ state
+  // เพราะต้องอ่านค่าล่าสุดได้จากใน callback ที่ผูก closure ไว้แล้ว
+  const roomRef = useRef<RoomView | null>(null);
+  const snapshotRef = useRef<GameState | null>(null);
+  const liveRef = useRef<RoomLive | null>(null);
+  /** เห็น 404 ครั้งแรกตอนไหน — null = ตอนนี้ห้องยังอยู่ดี */
+  const missingSinceRef = useRef<number | null>(null);
+  /** กันไม่ให้ยิงขอที่นั่งคืนรัว ๆ ทุกรอบ poll ตอนที่ห้องเต็มหรือเซิร์ฟเวอร์ไม่ยอมรับ */
+  const rejoinAtRef = useRef<number>(0);
+
   useEffect(() => {
     setSession(readSession());
+  }, []);
+
+  /**
+   * ปลุกห้องที่เซิร์ฟเวอร์ลืมไปกลับมาด้วยรหัสเดิม
+   *
+   * ทำได้เพราะเกมนี้เป็นแบบ "เจ้าภาพถือสถานะ" อยู่แล้ว (ดู lib/room.ts)
+   * เครื่องเจ้าภาพมีทั้งรายชื่อสมาชิก สแนปช็อตเกม และสถานะสดครบอยู่ในมือ
+   * ฝั่งเซิร์ฟเวอร์จะเขียนให้เฉพาะตอนที่ห้องหายไปจริง ๆ เท่านั้น
+   */
+  const reviveRoom = useCallback(async (s: RoomSession): Promise<boolean> => {
+    if (s.role !== "host") return false;
+    const known = roomRef.current;
+    const now = Date.now();
+    try {
+      await postJson(`/api/room/${s.code}`, {
+        op: "restore",
+        memberId: s.memberId,
+        room: {
+          code: s.code,
+          createdAt: known?.createdAt ?? now,
+          updatedAt: now,
+          version: known?.version ?? 1,
+          hostId: s.memberId,
+          members:
+            known && known.members.length > 0
+              ? known.members
+              : [{ id: s.memberId, name: s.name, isHost: true, lastSeen: now }],
+          snapshot: snapshotRef.current,
+          live: liveRef.current,
+        },
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   // ── poll สถานะห้อง ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!session) {
       setRoom(null);
+      roomRef.current = null;
+      missingSinceRef.current = null;
+      setReconnecting(false);
       return;
     }
     let stopped = false;
 
-    const tick = async () => {
+    // afterRevive กันลูปไม่รู้จบ: ถ้าปลุกห้องแล้ว GET ยังไม่เจออีก (เช่นคำขอไปคนละ
+    // instance บน Vercel) ให้ปล่อยรอรอบถัดไปตามจังหวะปกติ ห้ามยิงซ้ำทันที
+    const tick = async (afterRevive = false) => {
       try {
         const res = await fetch(
           `/api/room/${session.code}?memberId=${encodeURIComponent(session.memberId)}`,
           { cache: "no-store" },
         );
         if (stopped) return;
+
         if (res.status === 404) {
-          // ห้องหายไปแล้ว (หมดอายุ หรือเซิร์ฟเวอร์รีสตาร์ทตอนใช้โหมดหน่วยความจำ)
+          // เซิร์ฟเวอร์ไม่รู้จักห้องนี้ — ส่วนใหญ่คือมันลืมไป ไม่ใช่ห้องถูกปิดจริง
+          // เจ้าภาพปลุกคืนได้เลยเพราะถือสถานะจริงอยู่ ส่วนผู้ติดตามต้องรอเจ้าภาพ
+          if (!afterRevive && session.role === "host" && (await reviveRoom(session))) {
+            if (stopped) return;
+            missingSinceRef.current = null;
+            void tick(true);
+            return;
+          }
+          if (stopped) return;
+          missingSinceRef.current ??= Date.now();
+          if (Date.now() - missingSinceRef.current < ROOM_GRACE_MS) {
+            setReconnecting(true);
+            return;
+          }
           setError("ห้องหมดอายุหรือถูกปิดไปแล้ว");
           writeSession(null);
           setSession(null);
+          setReconnecting(false);
           return;
         }
+
         if (!res.ok) return;
-        setRoom((await res.json()) as RoomView);
+        const view = (await res.json()) as RoomView;
+        roomRef.current = view;
+        missingSinceRef.current = null;
+        setReconnecting(false);
+        setRoom(view);
         setError(null);
+
+        // ห้องกลับมาแล้วแต่ไม่มีชื่อเราอยู่ในนั้น — เกิดตอนเจ้าภาพรีเฟรชหน้าไปพร้อมกับ
+        // ที่เซิร์ฟเวอร์ลืมห้อง เจ้าภาพจึงปลุกคืนได้แค่ตัวเอง ขอที่นั่งคืนเงียบ ๆ
+        // ดีกว่าปล่อยให้ผู้ติดตามนั่งดูห้องที่ตัวเองส่งอะไรเข้าไปไม่ได้
+        const seated = view.members.some((m) => m.id === session.memberId);
+        if (!seated && Date.now() - rejoinAtRef.current > 5_000) {
+          rejoinAtRef.current = Date.now();
+          try {
+            const back = await postJson<{ memberId: string }>(`/api/room/${session.code}`, {
+              op: "join",
+              name: session.name,
+              memberId: session.memberId,
+            });
+            if (stopped) return;
+            const next = { ...session, memberId: back.memberId };
+            writeSession(next);
+            setSession(next);
+          } catch {
+            /* ห้องอาจเต็ม — รอบหน้าค่อยลองใหม่ */
+          }
+        }
       } catch {
         /* เน็ตสะดุดชั่วคราว รอบหน้าค่อยลองใหม่ */
       }
@@ -162,7 +266,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
     };
-  }, [session]);
+  }, [session, reviveRoom]);
 
   const createRoom = useCallback(async (name: string): Promise<string | null> => {
     setBusy(true);
@@ -220,7 +324,13 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setRoom(null);
     setError(null);
+    setReconnecting(false);
     lastSyncRef.current = "";
+    lastLiveRef.current = "";
+    roomRef.current = null;
+    snapshotRef.current = null;
+    liveRef.current = null;
+    missingSinceRef.current = null;
     if (!current) return;
     try {
       await postJson(`/api/room/${current.code}`, {
@@ -250,6 +360,30 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     ),
   });
 
+  /**
+   * ส่งของขึ้นห้องแบบเจ้าภาพ — ล้มเหลวแล้วปลุกห้องคืนก่อนแล้วค่อยลองใหม่หนึ่งครั้ง
+   * ถ้าห้องหายไปจริง reviveRoom จะพาสแนปช็อตล่าสุดขึ้นไปให้อยู่แล้ว
+   */
+  const hostSync = useCallback(
+    async (s: RoomSession, payload: Record<string, unknown>): Promise<boolean> => {
+      const send = () =>
+        postJson(`/api/room/${s.code}`, { op: "sync", memberId: s.memberId, ...payload });
+      try {
+        await send();
+        return true;
+      } catch {
+        if (!(await reviveRoom(s))) return false;
+        try {
+          await send();
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    },
+    [reviveRoom],
+  );
+
   const syncSnapshot = useCallback(
     (state: GameState) => {
       if (!session || session.role !== "host") return;
@@ -257,16 +391,15 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       const serialized = JSON.stringify(trimmed);
       if (serialized === lastSyncRef.current) return;
       lastSyncRef.current = serialized;
-      void postJson(`/api/room/${session.code}`, {
-        op: "sync",
-        memberId: session.memberId,
-        snapshot: trimmed,
-      }).catch(() => {
+      // เก็บไว้ให้ reviveRoom หยิบไปใช้ ต้องเซ็ตก่อนยิงเสมอ ไม่งั้นตอนปลุกห้อง
+      // จะได้สถานะเก่ากว่าที่ผู้เล่นเห็นอยู่จริงหนึ่งจังหวะ
+      snapshotRef.current = trimmed;
+      void hostSync(session, { snapshot: trimmed }).then((ok) => {
         // ส่งไม่สำเร็จ ล้างตัวเทียบทิ้งเพื่อให้รอบหน้าลองส่งใหม่
-        lastSyncRef.current = "";
+        if (!ok) lastSyncRef.current = "";
       });
     },
-    [session],
+    [session, hostSync],
   );
 
   const syncLive = useCallback(
@@ -275,15 +408,12 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       const serialized = JSON.stringify(live);
       if (serialized === lastLiveRef.current) return;
       lastLiveRef.current = serialized;
-      void postJson(`/api/room/${session.code}`, {
-        op: "sync",
-        memberId: session.memberId,
-        live,
-      }).catch(() => {
-        lastLiveRef.current = "";
+      liveRef.current = live;
+      void hostSync(session, { live }).then((ok) => {
+        if (!ok) lastLiveRef.current = "";
       });
     },
-    [session],
+    [session, hostSync],
   );
 
   const sendIntent = useCallback(
@@ -345,6 +475,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       backend: room?.backend ?? null,
       error,
       busy,
+      reconnecting,
       isHost: session?.role === "host",
       snapshot: room?.snapshot ?? null,
       live: room?.live ?? null,
@@ -361,6 +492,7 @@ export function RoomProvider({ children }: { children: ReactNode }) {
       room,
       error,
       busy,
+      reconnecting,
       createRoom,
       joinRoom,
       leaveRoom,

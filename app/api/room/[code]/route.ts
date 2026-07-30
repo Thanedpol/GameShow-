@@ -19,6 +19,7 @@ import {
   getRoom,
   listIntents,
   pushIntent,
+  restoreRoom,
   roomBackend,
   saveRoom,
 } from "@/lib/roomStore";
@@ -35,6 +36,7 @@ export const dynamic = "force-dynamic";
  *      | "intent"  ผู้เล่นอื่นส่งข้อเสนอไปขึ้นจอเจ้าภาพ
  *      | "clear"   เจ้าภาพล้างข้อเสนอที่อ่านแล้วทิ้ง
  *      | "leave"   ออกจากห้อง
+ *      | "restore" เจ้าภาพปลุกห้องที่เซิร์ฟเวอร์ลืมไปกลับมา (ดู restoreRoom)
  */
 
 type Params = { params: Promise<{ code: string }> };
@@ -52,8 +54,10 @@ async function readCode(params: Params["params"]): Promise<string | null> {
 }
 
 async function buildView(room: RoomRecord): Promise<RoomView> {
+  // ดึง hostId ออกทิ้งตรงนี้ที่เดียว — ดู RoomView ใน lib/room.ts ว่าทำไม
+  const { hostId: _hostId, ...rest } = room;
   return {
-    ...room,
+    ...rest,
     members: activeMembers(room.members, Date.now()),
     intents: await listIntents(room.code),
     backend: roomBackend(),
@@ -94,6 +98,49 @@ interface OpBody {
   text?: unknown;
   kind?: unknown;
   questionId?: unknown;
+  room?: unknown;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * ตรวจห้องที่เจ้าภาพส่งกลับมาปลุก — เชื่อฝั่ง client ไม่ได้ ต้องประกอบใหม่เองทั้งก้อน
+ * ยอมรับเฉพาะรหัสที่ตรงกับ URL และ hostId ที่ตรงกับคนที่ยิงมา
+ */
+function sanitizeRestore(raw: unknown, code: string, hostId: string, now: number): RoomRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<RoomRecord>;
+  if (r.code !== code || r.hostId !== hostId) return null;
+
+  const members: RoomMember[] = Array.isArray(r.members)
+    ? r.members
+        .filter((m): m is RoomMember => Boolean(m) && typeof m === "object")
+        .map((m) => ({
+          id: UUID_PATTERN.test(String(m.id)) ? String(m.id) : "",
+          name: cleanName(m.name) ?? "ผู้เล่น",
+          isHost: m.id === hostId,
+          // ตั้งเวลาที่เห็นล่าสุดเป็นตอนนี้ ไม่ใช่ค่าที่ client ส่งมา
+          // เพราะทุกคนเพิ่งถูกปลุกกลับมาพร้อมกัน ไม่ควรโดนตัดออกทันที
+          lastSeen: now,
+        }))
+        .filter((m) => m.id)
+        .slice(0, 8)
+    : [];
+
+  if (!members.some((m) => m.id === hostId)) {
+    members.unshift({ id: hostId, name: "เจ้าภาพ", isHost: true, lastSeen: now });
+  }
+
+  return {
+    code,
+    createdAt: typeof r.createdAt === "number" ? r.createdAt : now,
+    updatedAt: now,
+    version: typeof r.version === "number" && r.version > 0 ? r.version : 1,
+    hostId,
+    members,
+    snapshot: (r.snapshot as GameState | null) ?? null,
+    live: (r.live as RoomRecord["live"]) ?? null,
+  };
 }
 
 export async function POST(request: NextRequest, { params }: Params) {
@@ -107,11 +154,33 @@ export async function POST(request: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "รูปแบบ JSON ไม่ถูกต้อง" }, { status: 400 });
   }
 
-  const room = await getRoom(code);
-  if (!room) return notFound();
-
   const memberId = typeof body.memberId === "string" ? body.memberId : null;
   const now = Date.now();
+
+  // ปลุกห้องคืนต้องทำก่อนด่าน 404 — เพราะทั้งจุดประสงค์ของมันคือตอนที่ห้องหายไปแล้ว
+  if (body.op === "restore") {
+    if (!memberId || !UUID_PATTERN.test(memberId)) {
+      return NextResponse.json({ error: "ต้องเป็นเจ้าภาพเท่านั้น" }, { status: 403 });
+    }
+    const existing = await getRoom(code);
+    if (existing) {
+      // มีคนปลุกไปแล้ว หรือห้องไม่เคยหาย — ยึดของบนเซิร์ฟเวอร์เป็นหลัก ไม่ทับ
+      return NextResponse.json(
+        { restored: false, room: await buildView(existing) },
+        noStore,
+      );
+    }
+    const revived = sanitizeRestore(body.room, code, memberId, now);
+    if (!revived) {
+      return NextResponse.json({ error: "ข้อมูลห้องไม่ครบ ปลุกคืนไม่ได้" }, { status: 400 });
+    }
+    const ok = await restoreRoom(revived);
+    const after = (await getRoom(code)) ?? revived;
+    return NextResponse.json({ restored: ok, room: await buildView(after) }, noStore);
+  }
+
+  const room = await getRoom(code);
+  if (!room) return notFound();
 
   switch (body.op) {
     case "join": {
