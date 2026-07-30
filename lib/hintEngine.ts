@@ -518,13 +518,13 @@ export async function gradeOpenAnswer(
   };
   const askModel = () =>
     callLlmJson<GradePayload>(choice, {
-        system: GRADE_SYSTEM,
-        prompt: userPrompt,
-        schema: GRADE_SCHEMA as unknown as Record<string, unknown>,
-        // อย่าลดลงมาต่ำกว่านี้ — เคยลองลดเป็น 900 เพราะคิดว่า JSON สั้น ๆ ไม่ต้องใช้เยอะ
-        // ผลคือโมเดลรุ่นที่คิดก่อนตอบใช้โควตาหมดไปกับการคิด แล้วคำตอบถูกตัดกลางคัน
-        // จน parse ไม่ผ่าน ตกไปใช้ fallbackGrade เงียบ ๆ ซึ่งให้คำตอบที่คำนวณผิดไป 83 คะแนน
-        // และเวลาที่ประหยัดได้จริงมีแค่ ~0.6 วินาที ไม่คุ้มกับความเสี่ยงเลย
+      system: GRADE_SYSTEM,
+      prompt: userPrompt,
+      schema: GRADE_SCHEMA as unknown as Record<string, unknown>,
+      // อย่าลดลงมาต่ำกว่านี้ — เคยลองลดเป็น 900 เพราะคิดว่า JSON สั้น ๆ ไม่ต้องใช้เยอะ
+      // ผลคือโมเดลรุ่นที่คิดก่อนตอบใช้โควตาหมดไปกับการคิด แล้วคำตอบถูกตัดกลางคัน
+      // จน parse ไม่ผ่าน ตกไปใช้ fallbackGrade เงียบ ๆ ซึ่งให้คำตอบที่คำนวณผิดไป 83 คะแนน
+      // และเวลาที่ประหยัดได้จริงมีแค่ ~0.6 วินาที ไม่คุ้มกับความเสี่ยงเลย
       maxTokens: 6000,
       tag: "grade",
     });

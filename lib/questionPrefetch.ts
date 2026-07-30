@@ -1,6 +1,7 @@
 "use client";
 
 import { fingerprint, markSeen, recentTopics, seenFingerprints, seenIds } from "./history";
+import { hintsReady, resetHints, warmHints } from "./hintPrefetch";
 import { drawQuestions } from "./questions";
 import {
   loadLlmSettings,
@@ -227,9 +228,15 @@ export function startPrefetch(): void {
 
   cachedKey = key;
   cached = null;
+  // ชุดคำถามเปลี่ยน คำใบ้ที่เตรียมไว้ของชุดเก่าจึงใช้ไม่ได้แล้ว
+  resetHints();
   inflight = prepare(settings)
     .then((result) => {
       cached = result;
+      // ข้อแรกไม่มีข้อก่อนหน้าให้เตรียมคำใบ้ให้ จึงต้องเตรียมตรงนี้
+      // ไม่งั้นเฉพาะข้อแรกข้อเดียวที่ยังต้องรอ "กำลังเตรียม" อยู่ ~8 วินาที
+      // ตอนนี้ผู้เล่นยังอยู่หน้าตั้งค่า เตรียมทิ้งไว้ได้สบาย ๆ
+      warmHints(result.questions[0]);
       return result;
     })
     .catch(() => {
@@ -247,8 +254,15 @@ export function startPrefetch(): void {
     });
 }
 
+/**
+ * "พร้อม" ต้องหมายถึงพร้อมเล่นจริง ไม่ใช่แค่มีคำถาม
+ *
+ * ถ้านับแค่คำถามเสร็จ ผู้เล่นจะกดเริ่มเกมทันทีที่ขึ้นว่าพร้อม แล้วไปเจอกล่องคำใบ้
+ * ขึ้นว่า "กำลังเตรียม" อีก ~8 วินาทีในข้อแรกทั้งที่นาฬิกาเดินแล้ว
+ * จึงต้องรอคำใบ้ของข้อแรกด้วย (ข้อถัด ๆ ไปเตรียมล่วงหน้าระหว่างเล่นข้อก่อนหน้าอยู่แล้ว)
+ */
 export function prefetchReady(): boolean {
-  return cached !== null;
+  return cached !== null && hintsReady(cached.questions[0]);
 }
 
 /**

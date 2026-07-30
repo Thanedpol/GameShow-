@@ -14,6 +14,7 @@ import {
   nameOfId,
 } from "@/lib/scoring";
 import { useCountdown } from "@/lib/useCountdown";
+import { takeHints, warmHints } from "@/lib/hintPrefetch";
 import { llmRequestPayload } from "@/lib/settings";
 import { useSpeechInput } from "@/lib/useSpeechInput";
 import { useVoiceRecorder } from "@/lib/useVoiceRecorder";
@@ -228,7 +229,6 @@ export default function QuestionScreen() {
   const textRef = useRef(text);
   textRef.current = text;
   const resolvedRef = useRef(false);
-  const hintKeyRef = useRef<string | null>(null);
   const nextBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // เดินตัวนับเฉพาะตอนกำลังตรวจ แล้วรีเซ็ตเมื่อออกจากช่วงนั้น
@@ -318,36 +318,40 @@ export default function QuestionScreen() {
     phase,
   ]);
 
-  // ── โหลดกล่องคำใบ้ล่วงหน้าตั้งแต่ข้อเริ่ม เพื่อให้กดเปิดได้ทันที ──────────
+  /**
+   * รับกล่องคำใบ้ที่เตรียมไว้ แล้วสั่งเตรียมของข้อถัดไปต่อทันที
+   *
+   * เดิมมี ref กันไม่ให้ยิงซ้ำต่อข้อ แต่พอย้ายมาใช้แคชแล้วมันกลายเป็นบั๊ก:
+   * React ใน dev รัน effect สองรอบต่อการ mount หนึ่งครั้ง รอบสองติด guard
+   * เลย early-return ทั้งที่ effect รีเซ็ตต่อข้อ (ที่ประกาศไว้ก่อนหน้า)
+   * ล้าง boxes เป็น null ไปแล้ว — ผลคือกล่องค้างที่ "กำลังเตรียม" ตลอดกาล
+   *
+   * เดิมไม่เจอเพราะการยิงจริงใช้เวลา ~8 วินาที กว่าผลจะกลับมาก็พ้นจังหวะนั้นไปแล้ว
+   * พอแคชตอบกลับทันทีปัญหาถึงโผล่ · ตอนนี้ตัด guard ทิ้งแล้วให้แคชกันการยิงซ้ำแทน
+   * ซึ่งเป็นหน้าที่ของมันอยู่แล้ว
+   */
   useEffect(() => {
     if (!question) return;
-    const key = `${state.currentQuestionIndex}-${question.id}`;
-    if (hintKeyRef.current === key) return;
-    hintKeyRef.current = key;
-
-    (async () => {
-      try {
-        const res = await fetch("/api/hint", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // ส่งตัวข้อไปด้วย เผื่อเป็นคำถามที่แก้/เพิ่มจากหลังบ้าน
-          // ซึ่งเซิร์ฟเวอร์ไม่มีอยู่ในคลังตั้งต้น
-          body: JSON.stringify({
-            questionId: question.id,
-            question,
-            llm: llmRequestPayload("hint"),
-          }),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const data = (await res.json()) as HintApiResponse;
-        setBoxes(data.boxes);
-        setRevealToken(data.revealToken);
-        setHintSource(data.source);
-      } catch {
+    let cancelled = false;
+    void takeHints(question).then((data) => {
+      if (cancelled) return;
+      if (!data) {
         setHintFailed(true);
+        return;
       }
-    })();
-  }, [question, state.currentQuestionIndex]);
+      setBoxes(data.boxes);
+      setRevealToken(data.revealToken);
+      setHintSource(data.source);
+    });
+
+    // เตรียมของข้อถัดไปตั้งแต่ตอนนี้ ระหว่างที่ผู้เล่นกำลังคิดข้อนี้อยู่
+    // พอกดข้อถัดไป กล่องจะขึ้นทันทีแทนที่จะขึ้นว่า "กำลังเตรียม" อีก ~8 วินาที
+    warmHints(state.questions[state.currentQuestionIndex + 1]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [question, state.currentQuestionIndex, state.questions]);
 
   // ── โฟกัสปุ่มถัดไป ───────────────────────────────────────────────────────
   useEffect(() => {
