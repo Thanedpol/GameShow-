@@ -19,7 +19,7 @@ const MODE_INFO: Array<{ mode: MatchMode; icon: string; detail: string }> = [
 
 export default function SetupScreen() {
   const { dispatch } = useGame();
-  const { isHost } = useRoom();
+  const { isHost, session } = useRoom();
   const [mode, setMode] = useState<MatchMode>("bot");
   const [botLevel, setBotLevel] = useState<BotLevel>("ปกติ");
   const [count, setCount] = useState(2);
@@ -65,6 +65,25 @@ export default function SetupScreen() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  /**
+   * เอาชื่อที่กรอกไว้ตอนเปิด/เข้าห้อง มาเติมช่องชื่อผู้เล่นให้เลย
+   *
+   * เดิมชื่อไหลทางเดียว — หน้าตั้งค่าส่งชื่อไปให้กล่องห้องเป็นค่าตั้งต้น
+   * แต่ไม่มีทางกลับ คนที่เปิดห้องก่อน (ซึ่งเป็นลำดับที่แนะนำไว้เอง เพราะกล่องห้อง
+   * อยู่บนสุด) จึงกรอกชื่อไปแล้วรอบหนึ่ง แต่ปุ่มเริ่มเกมยังกดไม่ได้
+   * เพราะระบบไปถามชื่ออีกช่องที่อยู่ไกลลงมาจนมองไม่เห็น
+   *
+   * เขียนทับเฉพาะตอนช่องยังว่าง จะได้ไม่ทับสิ่งที่ผู้เล่นตั้งใจแก้เอง
+   */
+  useEffect(() => {
+    const fromRoom = session?.name?.trim();
+    if (!fromRoom) return;
+    setNames((prev) => (prev[0]?.trim() ? prev : [fromRoom, ...prev.slice(1)]));
+    setMembers((prev) =>
+      prev[0]?.[0]?.trim() ? prev : [[fromRoom, prev[0][1]], ...prev.slice(1)],
+    );
+  }, [session?.name]);
 
   const slots = mode === "solo" || mode === "bot" ? 1 : count;
 
@@ -449,11 +468,40 @@ export default function SetupScreen() {
           {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
         </button>
         {!ready ? (
-          <p className="mt-1.5 text-center text-xs text-amber-200/90">
-            {needsRoom
-              ? "โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่ เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้"
-              : `ปุ่มยังกดไม่ได้เพราะยังไม่ได้กรอก: ${missing.join(" · ")}`}
-          </p>
+          needsRoom ? (
+            <p className="mt-1.5 text-center text-xs text-amber-200/90">
+              โหมดทีมต้องเปิดห้องก่อน — เลื่อนขึ้นไปที่ “เล่นข้ามเครื่อง” แล้วกดเปิดห้องใหม่
+              เพื่อให้เพื่อนร่วมทีมเข้ามาช่วยคิดจากอีกเครื่องได้
+            </p>
+          ) : (
+            /*
+              กดแล้วพาไปที่ช่องที่ยังว่างเลย ไม่ใช่แค่บอกชื่อช่อง
+              เพราะแถบนี้ตรึงอยู่ล่างจอ ส่วนช่องที่ต้องกรอกมักอยู่นอกจอด้านบน
+              บอกชื่อช่องเฉย ๆ ผู้ใช้ก็ยังต้องเลื่อนหาเองอยู่ดี
+            */
+            <button
+              onClick={() => {
+                const empty = [...document.querySelectorAll<HTMLInputElement>("input.field")]
+                  .find((i) => !i.value.trim());
+                if (!empty) return;
+                /*
+                  คำนวณตำแหน่งเลื่อนเอง ไม่ใช้ scrollIntoView และไม่ใส่ behavior: "smooth"
+                  วัดแล้วทั้งสองอย่างไม่ขยับจริง (ช่องยังค้างที่ 1374px นอกจอ)
+                  เพราะเครื่องที่เปิด "ลดการเคลื่อนไหว" ไว้จะเมินการเลื่อนแบบ smooth
+                  ซึ่งเป็นค่าที่คนตั้งกันจริงบนมือถือ · เลื่อนแบบทันทีจึงเชื่อถือได้กว่า
+
+                  เลื่อนให้ช่องมาอยู่ราวหนึ่งในสามของจอ จะได้ไม่ไปติดใต้แถบปุ่มที่ตรึงล่าง
+                */
+                const y =
+                  empty.getBoundingClientRect().top + window.scrollY - window.innerHeight / 3;
+                window.scrollTo(0, Math.max(0, y));
+                empty.focus({ preventScroll: true });
+              }}
+              className="inline-link mt-1.5 w-full text-center text-xs text-amber-200/90 underline"
+            >
+              ยังไม่ได้กรอก: {missing.join(" · ")} — แตะเพื่อไปที่ช่องนั้น
+            </button>
+          )
         ) : null}
       </div>
     </div>
