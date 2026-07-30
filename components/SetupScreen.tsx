@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import RoomPanel from "./RoomPanel";
 import { useGame } from "@/lib/gameStore";
 import { BOT_LEVELS, type BotLevel } from "@/lib/bot";
-import { startPrefetch, takeQuestions } from "@/lib/questionPrefetch";
+import { prefetchReady, startPrefetch, takeQuestions } from "@/lib/questionPrefetch";
 import { MODE_LABEL, STAGE_LABEL } from "@/lib/scoring";
 import { DEFAULT_SETTINGS, loadSettings, type GameSettings } from "@/lib/settings";
 import { MAX_PARTICIPANTS, TEAM_SIZE, type MatchMode, type Participant } from "@/lib/types";
@@ -33,36 +33,36 @@ export default function SetupScreen() {
   const [cfg, setCfg] = useState<GameSettings>(DEFAULT_SETTINGS);
   const [starting, setStarting] = useState(false);
   const [waited, setWaited] = useState(0);
+  /** ชุดคำถามเตรียมเสร็จแล้วหรือยัง — ใช้บอกสถานะ "ก่อน" กดปุ่ม ไม่ใช่หลังกด */
+  const [prepped, setPrepped] = useState(false);
   useEffect(() => setCfg(loadSettings()), []);
 
   /**
-   * เริ่มแต่งคำถามเบื้องหลังทันทีที่ผู้เล่นแตะอะไรก็ตามบนหน้านี้
+   * เริ่มแต่งคำถามทันทีที่เปิดหน้านี้ ไม่รอให้ผู้เล่นแตะอะไรก่อน
    *
-   * ไม่ยิงตอน mount เพราะคนที่เปิดหน้ามาดูเฉย ๆ ไม่ควรทำให้เสียโทเคน
-   * แต่ก็ไม่รอจนกดเลือกโหมด เพราะการแต่งคำถามใช้เวลาราว 40 วินาที
-   * ถ้าเริ่มช้าไปผู้เล่นที่พิมพ์ชื่อเร็วจะต้องมานั่งรอหน้าปุ่ม
-   * การแตะหน้าจอครั้งแรกคือสัญญาณที่เร็วที่สุดที่ยังบอกได้ว่า "จะเล่นจริง"
+   * เดิมรอจังหวะแตะหน้าจอครั้งแรกเพื่อไม่ให้คนที่เปิดมาดูเฉย ๆ เสียโทเคน
+   * แต่การแต่งคำถามใช้เวลาราว 45 วินาที คนที่กรอกชื่อเร็วจึงไปเจอหน้าจอรอ
+   * หลังกดปุ่มอยู่ดี ซึ่งเป็นจังหวะที่แย่ที่สุดเพราะเขาพร้อมเล่นแล้ว
+   *
+   * ผู้ใช้เลือกให้ย้ายการรอมาไว้ "ก่อนกดปุ่ม" แทน — เปิดหน้ามาก็เริ่มคิดเลย
+   * กว่าจะเลือกโหมดและกรอกชื่อเสร็จ ชุดคำถามมักพร้อมแล้ว กดปุ่มแล้วเข้าเกมทันที
+   * แลกกับการที่คนเปิดมาดูเฉย ๆ ก็กินโทเคนไปหนึ่งชุด
    */
   useEffect(() => {
-    const kick = () => startPrefetch();
-    const opts = { once: true, passive: true } as const;
-    window.addEventListener("pointerdown", kick, opts);
-    window.addEventListener("keydown", kick, opts);
-    return () => {
-      window.removeEventListener("pointerdown", kick);
-      window.removeEventListener("keydown", kick);
-    };
-  }, []);
-
-  // นับวินาทีตอนรอ เพื่อให้เห็นว่าระบบยังทำงานอยู่ ไม่ได้ค้าง
-  useEffect(() => {
-    if (!starting) {
-      setWaited(0);
+    startPrefetch();
+    if (prefetchReady()) {
+      setPrepped(true);
       return;
     }
-    const timer = window.setInterval(() => setWaited((n) => n + 1), 1000);
+    const timer = window.setInterval(() => {
+      setWaited((n) => n + 1);
+      if (prefetchReady()) {
+        setPrepped(true);
+        window.clearInterval(timer);
+      }
+    }, 1000);
     return () => window.clearInterval(timer);
-  }, [starting]);
+  }, []);
 
   const slots = mode === "solo" || mode === "bot" ? 1 : count;
 
@@ -293,19 +293,35 @@ export default function SetupScreen() {
               </div>
             ))}
 
+        {/*
+          สถานะการเตรียมคำถามอยู่ "เหนือปุ่ม" และขึ้นตั้งแต่ยังไม่กด
+          ผู้ใช้ขอไว้ว่าไม่อยากเห็นข้อความแต่งคำถามตอนกดเริ่มเกม เพราะกดแล้ว
+          ต้องการให้พร้อมเล่นเลย — การรอจึงต้องเกิดตอนที่เขายังกรอกชื่ออยู่
+          ไม่ใช่ตอนที่เขาพร้อมแล้ว
+        */}
+        <p
+          className={`text-center text-xs ${prepped ? "text-teal-300" : "text-slate-400"}`}
+          aria-live="polite"
+        >
+          {prepped ? (
+            <>✓ ชุดคำถามใหม่พร้อมแล้ว</>
+          ) : (
+            <>
+              <span className="mr-1 inline-block animate-pulse">●</span>
+              กำลังเตรียมชุดคำถามให้เบื้องหลัง · {waited} วินาที
+            </>
+          )}
+        </p>
+
         <button
           onClick={() => void handleStart()}
           disabled={!ready || starting}
           className="btn-primary w-full text-lg disabled:opacity-60"
         >
-          {starting ? "กำลังเตรียมคำถามจากข่าวจริง..." : "เริ่มเกม"}
+          {starting ? "กำลังเข้าเกม..." : "เริ่มเกม"}
         </button>
         {!ready ? (
           <p className="text-center text-xs text-slate-500">กรอกชื่อให้ครบก่อนเริ่ม</p>
-        ) : starting ? (
-          <p className="text-center text-xs text-sky-300">
-            แต่งคำถามชุดใหม่จากข่าวและบทความที่เพิ่งเผยแพร่ · {waited} วินาที
-          </p>
         ) : null}
       </section>
 
